@@ -2018,6 +2018,15 @@ async function fbBackend() {
     async addResult(code, r) { await F.addDoc(F.collection(db, 'leagues', code, 'results'), { ...r, uid: user.uid, reactions: {}, createdAt: F.serverTimestamp() }); },
     async updateResult(code, id, r) { await F.updateDoc(F.doc(db, 'leagues', code, 'results', id), r); },
     async deleteResult(code, id) { await F.deleteDoc(F.doc(db, 'leagues', code, 'results', id)); },
+    async deleteResults(code, ids) {
+      for (let i = 0; i < ids.length; i += 400) { const b = F.writeBatch(db); ids.slice(i, i + 400).forEach(id => b.delete(F.doc(db, 'leagues', code, 'results', id))); await b.commit(); }
+    },
+    // Organizer only: results first, then members, then the league itself (the rules check the league to confirm the organizer).
+    async deleteLeague(code, resultIds, memberIds) {
+      await this.deleteResults(code, resultIds);
+      for (let i = 0; i < memberIds.length; i += 400) { const b = F.writeBatch(db); memberIds.slice(i, i + 400).forEach(id => b.delete(F.doc(db, 'leagues', code, 'members', id))); await b.commit(); }
+      await F.deleteDoc(L(code));
+    },
     async react(code, id, emoji) { await F.updateDoc(F.doc(db, 'leagues', code, 'results', id), { [`reactions.${user.uid}`]: emoji || F.deleteField() }); },
     watch(code, cb, onErr) {
       const offs = [
@@ -2073,9 +2082,9 @@ function leagueHTML() {
   const lg = S.league;
   let h = `<div class="lg-head"><button class="lg-title lg-switcher" data-a="lg-switch-open" aria-label="Switch league"><div class="live-type">${esc(lg.name)} <span class="chev" aria-hidden="true"></span></div><div class="muted small">Playing as ${esc(lg.player)}, code <b class="code">${esc(lg.code)}</b></div></button>
     <button class="btn" data-a="lg-share">Invite</button></div>`;
+  if (LGD.ready && !LGD.league) return h + `<p class="warn">This league was deleted by its organizer, so its results are gone.</p><div class="stack-btns"><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
   if (LGD.error) h += `<p class="warn">${esc(LGD.error)}</p>`;
   if (!LGD.ready && !LGD.error) return h + `<p class="note">Loading the league…</p>`;
-  if (LGD.ready && !LGD.league) return h + `<p class="warn">This league no longer exists. <button class="link inline" data-a="lg-leave-confirm">Leave it</button></p>`;
   h += `<button class="btn primary wide" data-a="lg-add">Add my result</button>
     <div class="seg two-up" role="group" aria-label="Show" style="margin-top:14px">${[['standings', 'Standings'], ['nights', 'Game nights']].map(([v, l]) => `<button data-a="lg-view" data-v="${v}" aria-pressed="${lgView === v}">${l}</button>`).join('')}</div>`;
   if (!LGD.results.length) return h + `<p class="note">No results yet. After your next game, tap Add my result, and ask everyone else to add theirs.</p>` + lgFoot();
@@ -2102,7 +2111,8 @@ const lgFoot = () => {
   return `<section class="an"><h2>League options</h2>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p></section>
-    <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button></div>`;
+    <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
+    ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
 };
 function openSwitcher() {
   openSheet(`<div class="sheet-head"><span></span><h2>Your leagues</h2><button class="link strong" data-a="close">Done</button></div>
@@ -2257,14 +2267,42 @@ Object.assign(A, {
     openResult(r.id);
     try { const be = await lgBackend(); await be.react(S.league.code, r.id, next); } catch (e) { toast('Couldn’t send your reaction. Check your connection.'); }
   },
-  'lg-leave': () => openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Leave league</h2><span></span></div>
-    <div class="sheet-body"><p>You’ll stop seeing ${esc(S.league.name)} on this phone. Your results stay in the league, and you can rejoin anytime with code <b>${esc(S.league.code)}</b>.</p>
-    <div class="stack-btns"><button class="btn danger" data-a="lg-leave-confirm">Leave league</button><button class="btn" data-a="close">Stay</button></div></div>`),
+  'lg-leave': () => {
+    const mine = LGD.results.filter(r => r.uid === LGD.uid).length;
+    openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Leave league</h2><span></span></div>
+    <div class="sheet-body"><p>You’ll stop seeing ${esc(S.league.name)} on this phone. You can rejoin anytime with code <b>${esc(S.league.code)}</b>.</p>
+    ${mine ? `<label class="switch"><input type="checkbox" id="lg-wipe"><span><b>Also delete my ${mine} result${mine === 1 ? '' : 's'}</b><br><span class="muted small">Your results disappear from the standings and game nights for everyone. Past nights may no longer add up to $0. This can’t be undone.</span></span></label>`
+      : '<p class="muted small">You haven’t added any results to this league.</p>'}
+    <div class="stack-btns"><button class="btn danger" data-a="lg-leave-confirm">Leave league</button><button class="btn" data-a="close">Stay</button></div></div>`);
+  },
   'lg-leave-confirm': async () => {
-    const code = S.league && S.league.code;
-    try { const be = await lgBackend(); if (code) await be.removeMember(code); } catch (e) {}
+    const code = S.league && S.league.code, wipe = $('#lg-wipe') && $('#lg-wipe').checked;
     const gone = S.league ? S.league.name : 'the league';
-    S.league = null; save(); lgStart(); closeSheet(); renderLeague(); toast(`You left ${gone}.`);
+    try {
+      const be = await lgBackend();
+      if (code && wipe) await be.deleteResults(code, LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id));
+      if (code) await be.removeMember(code);
+    } catch (e) { if (wipe) { toast('Couldn’t delete your results. Check your connection and try again.'); return; } }
+    S.league = null; save(); lgStart(); closeSheet(); renderLeague(); toast(wipe ? `You left ${gone} and deleted your results.` : `You left ${gone}.`);
+  },
+  'lg-forget': () => { S.league = null; save(); lgStart(); renderLeague(); toast('Removed from this phone.'); },
+  'lg-delete': () => {
+    const lg = S.league, nights = new Set(LGD.results.map(r => r.date)).size;
+    openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Delete league</h2><span></span></div>
+    <div class="sheet-body"><p>This permanently deletes <b>${esc(lg.name)}</b> for everyone: ${LGD.results.length} result${LGD.results.length === 1 ? '' : 's'} from ${nights} game night${nights === 1 ? '' : 's'}, all reactions, and its ${LGD.members.length} member${LGD.members.length === 1 ? '' : 's'}. This can’t be undone.</p>
+    <label class="field"><span>Type the league name to confirm</span><input type="text" id="lg-del-name" autocomplete="off" autocapitalize="off" placeholder="${esc(lg.name)}"></label>
+    <p class="err" id="lg-err" role="alert"></p>
+    <div class="stack-btns"><button class="btn danger" data-a="lg-delete-confirm">Delete league for everyone</button><button class="btn" data-a="close">Keep the league</button></div></div>`, { backdropCloses: false });
+  },
+  'lg-delete-confirm': async () => {
+    const lg = S.league;
+    if (key($('#lg-del-name').value) !== key(lg.name)) return lgFail(`Type ${lg.name} exactly to confirm.`);
+    lgFail('Deleting…');
+    try {
+      const be = await lgBackend();
+      await be.deleteLeague(lg.code, LGD.results.map(r => r.id), LGD.members.map(m => m.id));
+      S.league = null; save(); lgStart(); closeSheet(); renderLeague(); toast(`Deleted ${lg.name}.`);
+    } catch (e) { lgFail('Couldn’t delete the league. Check your connection and try again.'); }
   },
   // Add button: a menu, or straight back to a session in progress
   add: () => {
