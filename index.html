@@ -2164,7 +2164,7 @@ const lgFoot = () => {
   return `<section class="an"><h2>League options</h2>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
-    <label class="field" style="margin-top:14px"><span>What your friends call you</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
+    <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small">Changing it also updates the name on your past results.</p></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
@@ -2185,7 +2185,7 @@ function openJoin(step = 'code', code = '', note = '') {
     <p class="muted small">Ask whoever started the league for its 6-character code.</p><p class="err" id="lg-err" role="alert">${esc(note)}</p></div>`, { backdropCloses: false });
   } else {
     openSheet(`<div class="sheet-head"><button class="link" data-a="lg-join-open">Back</button><h2>${esc(pendingLeague.name)}</h2><button class="link strong" data-a="lg-join-do">Join</button></div>
-    <div class="sheet-body"><label class="field"><span>What your friends call you</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+    <div class="sheet-body"><label class="field"><span>Your name in this league</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
     <p class="muted small" id="lg-who-note"></p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
   }
 }
@@ -2193,7 +2193,7 @@ let pendingLeague = null, lgEditing = null;
 function openCreate() {
   openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Start a league</h2><button class="link strong" data-a="lg-create-do">Start</button></div>
   <div class="sheet-body"><label class="field"><span>League name</span><input type="search" id="lg-title-in" enterkeyhint="next" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-league-name" maxlength="32" placeholder="Friday Night League" enterkeyhint="next"></label>
-  <label class="field"><span>What your friends call you</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+  <label class="field"><span>Your name in this league</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
   <p class="muted small">You’ll get a code to share with your friends so they can join.</p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
 }
 function openResultForm(r) {
