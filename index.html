@@ -120,7 +120,7 @@ table.stats td .sub { font-size: 13px; color: var(--ink2); margin-top: 1px; }
 .link.inline { padding: 0; min-height: 0; text-decoration: underline; text-underline-offset: 2px; font-size: inherit; }
 .field { display: block; margin: 0 0 16px; }
 .field > span, .label { display: block; font-size: 15px; color: var(--ink2); margin-bottom: 5px; }
-input[type="text"], input[type="date"], input:not([type]), select, textarea {
+input[type="text"], input[type="search"], input[type="date"], input:not([type]), select, textarea {
   width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid var(--fieldline); border-radius: 12px;
   background: var(--field); font-size: 17px; -webkit-appearance: none; appearance: none; }
 input[type="date"] { display: block; text-align: left; }
@@ -293,7 +293,8 @@ table.bt tr.subhead + tr td { padding-top: 12px; }
 .list-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 2px 0 10px; }
 .list-filter .select { max-width: 46vw; }
 .list-filter select { min-height: 44px; }
-input[type="search"] { width: 100%; min-height: 44px; padding: 9px 12px; border: 1px solid var(--fieldline); border-radius: 12px; background: var(--field); font-size: 16px; -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.list-filter input[type="search"] { min-height: 44px; padding: 9px 12px; font-size: 16px; }
 .res-prompt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 10px; font-size: 15px; }
 .res-prompt span { margin-right: 2px; }
 .bk-card { border: 1px solid var(--fieldline); background: var(--field); border-radius: 14px; padding: 12px 14px; margin: 2px 0 14px; }
@@ -355,6 +356,8 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .top h1 { flex: 1; min-width: 0; }
 #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lg-list { display: grid; gap: 10px; }
+.lg-top-btns { margin-top: 2px; }
+.lg-list-h { font-size: 17px; margin: 26px 0 10px; }
 .lg-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--fieldline); background: var(--field); }
 .lg-card:active { background: var(--press); }
 .lg-card-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -715,7 +718,7 @@ function openSessionForm(id, fromLive = false) {
     <label class="field"><span>Date</span><input type="date" id="f-date" value="${v.date}" max="2100-12-31"></label>
     <div class="field"><span id="l-type">Session type</span>
       ${chips ? `<div class="chips" role="group" aria-labelledby="l-type">${chips}</div>` : ''}
-      <input type="text" id="f-type" value="${esc(v.type)}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-f-type" enterkeyhint="next" aria-labelledby="l-type" placeholder="Home game, casino, league…" maxlength="60">
+      <input type="search" id="f-type" value="${esc(v.type)}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-f-type" enterkeyhint="next" aria-labelledby="l-type" placeholder="Home game, casino, league…" maxlength="60">
     </div>
     <div class="two">
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="f-buyin" inputmode="decimal" value="${v.buyIn}" placeholder="0.00" enterkeyhint="next"></div></label>
@@ -1472,7 +1475,7 @@ function liveStartHTML() {
     <p class="lede">Keep the app open while you play. Log each buy-in as you make it, and each hand’s cards and pre-flop action. When you’re done, enter your ending stack to save the session.</p>
     <div class="field"><span id="l-ls-type">Session type</span>
       ${chips ? `<div class="chips" role="group" aria-labelledby="l-ls-type">${chips}</div>` : ''}
-      <input type="text" id="ls-type" value="${esc(recent[0] ? recent[0].name : '')}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-ls-type" enterkeyhint="next" aria-labelledby="l-ls-type" placeholder="Home game, casino, league…" maxlength="60">
+      <input type="search" id="ls-type" value="${esc(recent[0] ? recent[0].name : '')}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-ls-type" enterkeyhint="next" aria-labelledby="l-ls-type" placeholder="Home game, casino, league…" maxlength="60">
     </div>
     <label class="field"><span>First buy-in</span><div class="money"><i>$</i><input type="text" id="ls-buyin" inputmode="decimal" placeholder="0.00" enterkeyhint="go"></div></label>
     <p class="err" id="ls-err" role="alert"></p>
@@ -2115,11 +2118,11 @@ function leagueHTML() {
     return `<div class="empty"><p>League isn’t set up yet</p><p class="muted">The league needs a free Firebase project to store everyone’s results. Whoever runs this copy of Felt adds their Firebase settings to <b>firebase-config.js</b> in the app’s GitHub repository. The steps are in <b>LEAGUE-SETUP.md</b>.</p></div>`;
   }
   if (S.leagues.length && !lgOpen) {
-    return `<p class="muted small" style="margin:2px 0 12px">Tap a league to see its standings and game nights.</p>
+    return `<div class="stack-btns lg-top-btns"><button class="btn primary" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>
+      <h2 class="lg-list-h">Your leagues</h2>
       <div class="lg-list">${S.leagues.map(l => `<button class="lg-card" data-a="lg-open" data-code="${l.code}">
         <span class="lg-card-txt"><b>${esc(l.name)}</b><span class="muted small">Playing as ${esc(l.player)}${l.type ? `, for ${esc(l.type)}` : ''}</span></span>
-        <span class="chev-r" aria-hidden="true"></span></button>`).join('')}</div>
-      <div class="stack-btns"><button class="btn" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>${recentHTML()}`;
+        <span class="chev-r" aria-hidden="true"></span></button>`).join('')}</div>${recentHTML()}`;
   }
   if (!S.league) {
     return `<div class="lg-intro"><p class="lede">Play in a league with friends. Everyone logs their own results, the standings update for the whole group, and you can react to each other’s nights.</p>
@@ -2161,7 +2164,7 @@ const lgFoot = () => {
   return `<section class="an"><h2>League options</h2>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
-    <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="text" id="lg-rename" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
+    <label class="field" style="margin-top:14px"><span>What your friends call you</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small">Changing it also updates the name on your past results.</p></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
@@ -2182,15 +2185,15 @@ function openJoin(step = 'code', code = '', note = '') {
     <p class="muted small">Ask whoever started the league for its 6-character code.</p><p class="err" id="lg-err" role="alert">${esc(note)}</p></div>`, { backdropCloses: false });
   } else {
     openSheet(`<div class="sheet-head"><button class="link" data-a="lg-join-open">Back</button><h2>${esc(pendingLeague.name)}</h2><button class="link strong" data-a="lg-join-do">Join</button></div>
-    <div class="sheet-body"><label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
-    <p class="muted small" id="lg-name-note"></p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
+    <div class="sheet-body"><label class="field"><span>What your friends call you</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+    <p class="muted small" id="lg-who-note"></p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
   }
 }
 let pendingLeague = null, lgEditing = null;
 function openCreate() {
   openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Start a league</h2><button class="link strong" data-a="lg-create-do">Start</button></div>
-  <div class="sheet-body"><label class="field"><span>League name</span><input type="text" id="lg-lname" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-league-name" maxlength="32" placeholder="Friday Night League" enterkeyhint="next"></label>
-  <label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+  <div class="sheet-body"><label class="field"><span>League name</span><input type="search" id="lg-title-in" enterkeyhint="next" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-league-name" maxlength="32" placeholder="Friday Night League" enterkeyhint="next"></label>
+  <label class="field"><span>What your friends call you</span><input type="search" id="lg-who" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
   <p class="muted small">You’ll get a code to share with your friends so they can join.</p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
 }
 function openResultForm(r) {
@@ -2269,7 +2272,7 @@ Object.assign(A, {
     } catch (e) { lgFail('Couldn’t reach the league. Check your connection and try again.'); }
   },
   'lg-join-do': async () => {
-    const name = $('#lg-name').value.trim().replace(/\s+/g, ' ');
+    const name = $('#lg-who').value.trim().replace(/\s+/g, ' ');
     if (!name) return lgFail('Enter your name.');
     try {
       const be = await lgBackend(); await be.setMember(pendingLeague.code, name);
@@ -2278,7 +2281,7 @@ Object.assign(A, {
     } catch (e) { lgFail('Couldn’t join right now. Check your connection and try again.'); }
   },
   'lg-create-do': async () => {
-    const lname = $('#lg-lname').value.trim().replace(/\s+/g, ' '), name = $('#lg-name').value.trim().replace(/\s+/g, ' ');
+    const lname = $('#lg-title-in').value.trim().replace(/\s+/g, ' '), name = $('#lg-who').value.trim().replace(/\s+/g, ' ');
     if (!lname) return lgFail('Give your league a name.');
     if (!name) return lgFail('Enter your name.');
     lgFail('Starting your league…');
@@ -2288,7 +2291,7 @@ Object.assign(A, {
       for (let i = 0; i < 4 && await be.getLeague(code); i++) code = lgCode();
       await be.createLeague(code, lname); await be.setMember(code, name);
       S.league = { code, name: lname, player: name }; S.settings.playerName = name; save();
-      closeSheet(); lgStart(); renderLeague(); A['lg-share']();
+      closeSheet(); lgStart(); renderLeague(); toast(`${lname} is ready. Tap Invite to share the code with your friends.`);
     } catch (e) { lgFail('Couldn’t start the league. Check your connection and try again.'); }
   },
   'lg-share': async () => {
@@ -2321,7 +2324,7 @@ Object.assign(A, {
     catch (e) { toast('Couldn’t rejoin right now. Check your connection and try again.'); }
   },
   'lg-rename': () => {
-    const name = $('#lg-rename').value.trim().replace(/\s+/g, ' ');
+    const name = $('#lg-who-edit').value.trim().replace(/\s+/g, ' ');
     if (!name || name === S.league.player) return;
     const code = S.league.code, ids = LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id);
     S.league.player = name; S.settings.playerName = name; save(); renderLeague();
