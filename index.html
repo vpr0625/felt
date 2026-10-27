@@ -349,6 +349,13 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .rx-who { margin-top: 10px; }
 .lg-switch { margin: 4px 0 12px; }
 .nw { white-space: nowrap; }
+.pl { stroke-width: 2; }
+.pl.faded { stroke-opacity: .18; }
+.pl.hl { stroke-width: 3.25; }
+.lg-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; }
+.leg-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--fieldline); background: transparent; border-radius: 999px; padding: 4px 10px; font-size: 13px; min-height: 30px; }
+.leg-chip i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.leg-chip.on { border-color: var(--ink); background: var(--field); font-weight: 700; }
 .back-btn { margin-left: -12px; flex: none; }
 .back-btn[hidden] { display: none; }
 .back-btn svg { width: 26px; height: 26px; }
@@ -356,7 +363,8 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .top h1 { flex: 1; min-width: 0; }
 #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lg-list { display: grid; gap: 10px; }
-.lg-top-btns { margin-top: 2px; }
+.lg-blurb { margin: 2px 0 14px; font-size: 15px; }
+.lg-top-btns { margin-top: 0; }
 .lg-list-h { font-size: 17px; margin: 26px 0 10px; }
 .lg-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--fieldline); background: var(--field); }
 .lg-card:active { background: var(--press); }
@@ -599,7 +607,7 @@ function render() {
   if (tab === 'home') { $('#main').innerHTML = homeHTML(); drawHome(); }
   else if (tab === 'sessions') $('#main').innerHTML = sessionsHTML();
   else if (tab === 'live') $('#main').innerHTML = liveHTML();
-  else if (tab === 'league') $('#main').innerHTML = leagueHTML();
+  else if (tab === 'league') { $('#main').innerHTML = leagueHTML(); if (lgOpen && lgView === 'standings') drawLeagueCharts(); }
   else { $('#main').innerHTML = analyticsHTML(); renderResults(); }
 }
 function setTab(t) { tab = t; render(); window.scrollTo(0, 0); }
@@ -1396,7 +1404,7 @@ $('#file-in').addEventListener('change', async e => {
 let resizeT = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeT);
-  resizeT = setTimeout(() => { if (window.innerWidth === lastWidth) return; if (tab === 'analytics' && lastRows && $('#results')) renderResults(); else if (tab === 'home') drawHome(); }, 150);
+  resizeT = setTimeout(() => { if (window.innerWidth === lastWidth) return; if (tab === 'analytics' && lastRows && $('#results')) renderResults(); else if (tab === 'home') drawHome(); else if (tab === 'league' && lgOpen) drawLeagueCharts(); }, 150);
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
@@ -2106,7 +2114,7 @@ function reactionChips(r) {
   for (const e of Object.values(r.reactions || {})) counts.set(e, (counts.get(e) || 0) + 1);
   return counts.size ? `<div class="rx">${[...counts].map(([e, n]) => `<span class="rx-chip${(r.reactions || {})[LGD.uid] === e ? ' mine' : ''}">${e} ${n}</span>`).join('')}</div>` : '';
 }
-function renderLeague() { if (tab === 'league') { $('#main').innerHTML = leagueHTML(); setLeagueHeader(); } }
+function renderLeague() { if (tab === 'league') { $('#main').innerHTML = leagueHTML(); setLeagueHeader(); if (lgOpen && lgView === 'standings') drawLeagueCharts(); } }
 function setLeagueHeader() {
   const inLeague = tab === 'league' && lgOpen && !!S.league && lgConfigured();
   $('#back-btn').hidden = !inLeague;
@@ -2118,7 +2126,8 @@ function leagueHTML() {
     return `<div class="empty"><p>League isn’t set up yet</p><p class="muted">The league needs a free Firebase project to store everyone’s results. Whoever runs this copy of Felt adds their Firebase settings to <b>firebase-config.js</b> in the app’s GitHub repository. The steps are in <b>LEAGUE-SETUP.md</b>.</p></div>`;
   }
   if (S.leagues.length && !lgOpen) {
-    return `<div class="stack-btns lg-top-btns"><button class="btn primary" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>
+    return `<p class="muted lg-blurb">Compete with your poker group. Everyone logs their own results.</p>
+      <div class="stack-btns lg-top-btns"><button class="btn primary" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>
       <h2 class="lg-list-h">Your leagues</h2>
       <div class="lg-list">${S.leagues.map(l => `<button class="lg-card" data-a="lg-open" data-code="${l.code}">
         <span class="lg-card-txt"><b>${esc(l.name)}</b><span class="muted small">Playing as ${esc(l.player)}${l.type ? `, for ${esc(l.type)}` : ''}</span></span>
@@ -2145,7 +2154,7 @@ function leagueHTML() {
     const st = lgStandings();
     h += `<table class="bt list standings"><thead><tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Total</th></tr></thead><tbody>
       ${st.map((p, i) => `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">Average <span class="nw">${usdC(p.total / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div></td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`).join('')}
-    </tbody></table><p class="muted small">Ranked by total profit/loss across every game night. Tap a player to see their results.</p>`;
+    </tbody></table><p class="muted small">Ranked by total profit/loss across every game night. Tap a player to see their results.</p>` + lgChartsHTML();
   } else {
     const nights = new Map();
     for (const r of LGD.results) { if (!nights.has(r.date)) nights.set(r.date, []); nights.get(r.date).push(r); }
@@ -2403,6 +2412,119 @@ Object.assign(A, {
   'add-done': () => openSessionForm(),
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
+
+/* ---------------- league charts ---------------- */
+const PLAYER_COLORS = ['#2f6fe4', '#e5483d', '#f28a1a', '#1fa463', '#9467bd', '#17a2b8', '#d6457a', '#8c6d3f', '#a3a31a', '#5f6b7a', '#3d5a80', '#c25fd1', '#2bb3a3', '#b5452b', '#6f8f2f', '#e0a21a'];
+let lgHL = '';   // player highlighted on the profit-over-time chart
+function lgPlayers() {
+  const st = lgStandings();
+  return st.map((p, i) => ({ ...p, k: key(p.name), color: PLAYER_COLORS[i % PLAYER_COLORS.length], results: LGD.results.filter(r => key(r.player) === key(p.name)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0) }));
+}
+function lgChartsHTML() {
+  if (LGD.results.length < 1) return '';
+  const many = new Set(LGD.results.map(r => r.date)).size > 1;
+  return `<section class="an"><h2>Net winnings</h2><figure id="lg-bars"><div class="chart"></div><div class="readout" aria-live="polite"></div></figure></section>
+    ${many ? `<section class="an"><h2>Profit over time</h2><figure id="lg-lines"><div class="chart"></div><div class="lg-legend" role="group" aria-label="Highlight a player"></div><div class="readout" aria-live="polite"></div>
+      <figcaption>Each player’s running total across game nights. Tap a name to highlight it.</figcaption></figure></section>` : ''}
+    <section class="an"><h2>Session spread</h2><figure id="lg-box"><div class="chart"></div><div class="readout" aria-live="polite"></div>
+      <figcaption>How much each player’s results swing from night to night. Each box spans the middle half of their nights, the dark line is the median, and circles are unusual nights.</figcaption></figure></section>`;
+}
+function drawLeagueCharts() {
+  const P = lgPlayers(); if (!P.length) return;
+  const run = (id, fn) => { const fig = document.getElementById(id); if (!fig) return; try { fn(fig, P); } catch (e) { fig.querySelector('.chart').innerHTML = '<p class="note">This chart couldn’t be drawn.</p>'; console.error(e); } };
+  run('lg-bars', drawLgBars); run('lg-lines', drawLgLines); run('lg-box', drawLgBox);
+  lastWidth = window.innerWidth;
+}
+function drawLgBars(fig, P) {
+  const el = fig.querySelector('.chart'), out = fig.querySelector('.readout');
+  const sums = P.map(p => p.total / 100), labels = sums.map(v => usd(v, true));
+  const padR = Math.max(0, ...sums.map((v, i) => v >= 0 ? tw(labels[i], 12) + 10 : 0));
+  const padL = Math.max(0, ...sums.map((v, i) => v < 0 ? tw(labels[i], 12) + 10 : 0));
+  const RH = 46, F = categoryFrame(el, P.length, Math.min(0, ...sums), Math.max(0, ...sums), RH, padL, padR);
+  let g = F.under + F.zero;
+  P.forEach((p, i) => {
+    const v = sums[i], y0 = F.row(i), by = y0 + 21, bh = 17;
+    const xa = F.x(Math.min(0, v)), xb = F.x(Math.max(0, v)), w = Math.max(2, xb - xa);
+    g += `<text class="lab" x="4" y="${f1(y0 + 13)}">${esc(fitText(p.name, F.W - 8, 13))}</text>`;
+    g += `<rect class="${v < 0 ? 'neg-f' : 'pos-f'}" x="${f1(v < 0 ? xb - w : xa)}" y="${f1(by)}" width="${f1(w)}" height="${bh}" rx="5"/>`;
+    g += `<text class="val ${v < 0 ? 'tneg' : v > 0 ? 'tpos' : ''}" x="${f1(v < 0 ? F.x(v) - 6 : F.x(v) + 6)}" y="${f1(by + bh / 2)}" dy=".35em" text-anchor="${v < 0 ? 'end' : 'start'}">${labels[i]}</text>`;
+  });
+  el.innerHTML = svgWrap(F.W, F.H, g + F.axes, 'Net winnings by player');
+  out.innerHTML = 'Tap a bar for details.';
+  const svg = el.querySelector('svg'), hov = svg.querySelector('.hov');
+  svg.addEventListener('pointerdown', e => {
+    const r = svg.getBoundingClientRect(), sy = (e.clientY - r.top) * (F.H / r.height);
+    const i = Math.max(0, Math.min(P.length - 1, Math.floor((sy - F.m.t) / RH))), p = P[i];
+    hov.innerHTML = `<rect class="hsel" x="0" y="${f1(F.row(i))}" width="${F.W}" height="${RH}" rx="8"/>`;
+    out.innerHTML = `<b>${esc(p.name)}</b>: ${moneyHTML(p.total / 100)} over ${p.n} night${p.n === 1 ? '' : 's'}<br>Average ${moneyHTML(p.total / 100 / p.n)}, ${p.wins} winning night${p.wins === 1 ? '' : 's'}`;
+  });
+}
+function drawLgLines(fig, P) {
+  const el = fig.querySelector('.chart'), out = fig.querySelector('.readout'), leg = fig.querySelector('.lg-legend');
+  const dates = [...new Set(LGD.results.map(r => r.date))].sort();
+  // each player's running total on every game night (flat on nights they skipped)
+  const series = P.map(p => {
+    let c = 0; const byDate = new Map();
+    for (const r of p.results) byDate.set(r.date, (byDate.get(r.date) || 0) + lgNet(r));
+    return { p, pts: dates.map(d => { c += byDate.get(d) || 0; return { t: tms(d), v: c / 100, d }; }) };
+  });
+  const all = series.flatMap(s => s.pts.map(q => q.v));
+  const F = timeFrame(el, series[0].pts, Math.min(0, ...all), Math.max(0, ...all));
+  if (lgHL && !P.some(p => p.k === lgHL)) lgHL = '';
+  const order = [...series].sort((a, b) => (a.p.k === lgHL) - (b.p.k === lgHL));   // highlighted line on top
+  const lines = order.map(s => `<path class="ln pl${lgHL && s.p.k !== lgHL ? ' faded' : ''}${s.p.k === lgHL ? ' hl' : ''}" style="stroke:${s.p.color}" d="${linePath(s.pts, F.x, F.y)}"/>`).join('');
+  el.innerHTML = svgWrap(F.W, F.H, F.under + zeroLine(F) + lines + F.axes, 'Each player’s profit over time');
+  leg.innerHTML = P.map(p => `<button class="leg-chip${p.k === lgHL ? ' on' : ''}" data-a="lg-hl" data-k="${esc(p.k)}" aria-pressed="${p.k === lgHL}"><i style="background:${p.color}"></i>${esc(p.name)}</button>`).join('');
+  out.innerHTML = 'Tap or drag across the chart to see the standings on each night.';
+  const svg = el.querySelector('svg'), hov = svg.querySelector('.hov'), px = dates.map(d => F.x(tms(d)));
+  const show = e => {
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * (F.W / r.width);
+    let bi = 0, bd = Infinity; px.forEach((v, i) => { const dd = Math.abs(v - sx); if (dd < bd) { bd = dd; bi = i; } });
+    const cx = f1(px[bi]), at = series.map(s => ({ p: s.p, v: s.pts[bi].v })).sort((a, b) => b.v - a.v);
+    const focus = lgHL ? at.filter(a => a.p.k === lgHL) : at.slice(0, 3);
+    hov.innerHTML = `<line class="guide" x1="${cx}" x2="${cx}" y1="${F.m.t}" y2="${F.H - F.m.b}"/>` + focus.map(a => `<circle class="hdot" style="stroke:${a.p.color}" cx="${cx}" cy="${f1(F.y(a.v))}" r="5"/>`).join('');
+    out.innerHTML = `<b>${fmtDate(dates[bi])}</b><br>${focus.map(a => `${esc(a.p.name)} ${moneyHTML(a.v)}`).join(', ')}${!lgHL && at.length > 3 ? ', …' : ''}`;
+  };
+  svg.addEventListener('pointerdown', show);
+  svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || e.buttons) show(e); });
+}
+function lgQuantile(a, q) { const pos = (a.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return a[lo] + (a[hi] - a[lo]) * (pos - lo); }
+function drawLgBox(fig, P) {
+  const el = fig.querySelector('.chart'), out = fig.querySelector('.readout');
+  const G = P.map(p => {
+    const a = p.results.map(r => lgNet(r) / 100).sort((x, y) => x - y), n = a.length;
+    const q1 = lgQuantile(a, 0.25), med = lgQuantile(a, 0.5), q3 = lgQuantile(a, 0.75), iqr = q3 - q1;
+    const inn = a.filter(v => v >= q1 - 1.5 * iqr && v <= q3 + 1.5 * iqr), mean = a.reduce((s, v) => s + v, 0) / n;
+    const sd = n > 1 ? Math.sqrt(a.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1)) : NaN;
+    return { p, a, n, q1, med, q3, wlo: inn[0], whi: inn[inn.length - 1], fliers: a.filter(v => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr), sd };
+  });
+  const all = G.flatMap(g => g.a);
+  const RH = 52, F = categoryFrame(el, G.length, Math.min(0, ...all), Math.max(0, ...all), RH, 4, 6);
+  let s = F.under + F.zero;
+  G.forEach((g, i) => {
+    const y0 = F.row(i), cy = y0 + 33, bh = 18, x = F.x, c = g.p.color;
+    s += `<text class="lab" x="4" y="${f1(y0 + 13)}">${esc(fitText(g.p.name, F.W - tw(`  ${g.n} nights`, 12) - 12, 13))}<tspan class="sub" dx="6">${g.n} night${g.n === 1 ? '' : 's'}</tspan></text>`;
+    if (g.n === 1) { s += `<circle cx="${f1(x(g.a[0]))}" cy="${f1(cy)}" r="4" style="fill:${c}"/>`; return; }
+    s += `<line class="whisk" x1="${f1(x(g.wlo))}" x2="${f1(x(g.whi))}" y1="${f1(cy)}" y2="${f1(cy)}"/>`;
+    s += `<line class="whisk" x1="${f1(x(g.wlo))}" x2="${f1(x(g.wlo))}" y1="${f1(cy - 5)}" y2="${f1(cy + 5)}"/><line class="whisk" x1="${f1(x(g.whi))}" x2="${f1(x(g.whi))}" y1="${f1(cy - 5)}" y2="${f1(cy + 5)}"/>`;
+    s += `<rect x="${f1(x(g.q1))}" y="${f1(cy - bh / 2)}" width="${f1(Math.max(2, x(g.q3) - x(g.q1)))}" height="${bh}" rx="5" style="fill:${c};fill-opacity:.22;stroke:${c};stroke-width:1.5"/>`;
+    s += `<line class="median" x1="${f1(x(g.med))}" x2="${f1(x(g.med))}" y1="${f1(cy - bh / 2 + 3)}" y2="${f1(cy + bh / 2 - 3)}"/>`;
+    s += g.fliers.map(v => `<circle class="flier" cx="${f1(x(v))}" cy="${f1(cy)}" r="3.2" style="stroke:${c}"/>`).join('');
+  });
+  el.innerHTML = svgWrap(F.W, F.H, s + F.axes, 'Spread of each player’s results');
+  out.innerHTML = 'Tap a player for their numbers.';
+  const svg = el.querySelector('svg'), hov = svg.querySelector('.hov');
+  svg.addEventListener('pointerdown', e => {
+    const r = svg.getBoundingClientRect(), sy = (e.clientY - r.top) * (F.H / r.height);
+    const i = Math.max(0, Math.min(G.length - 1, Math.floor((sy - F.m.t) / RH))), g = G[i];
+    hov.innerHTML = `<rect class="hsel" x="0" y="${f1(F.row(i))}" width="${F.W}" height="${RH}" rx="8"/>`;
+    out.innerHTML = g.n === 1 ? `<b>${esc(g.p.name)}</b>: one night so far, ${moneyHTML(g.a[0])}`
+      : `<b>${esc(g.p.name)}</b>: median ${moneyHTML(g.med)}, middle half ${moneyHTML(g.q1)} to ${moneyHTML(g.q3)}<br>Best ${moneyHTML(g.a[g.n - 1])}, worst ${moneyHTML(g.a[0])}, standard deviation ${usd(g.sd)}`;
+  });
+}
+Object.assign(A, {
+  'lg-hl': t => { lgHL = lgHL === t.dataset.k ? '' : t.dataset.k; const fig = document.getElementById('lg-lines'); if (fig) drawLgLines(fig, lgPlayers()); },
+});
 
 /* ---------------- start ---------------- */
 load();
