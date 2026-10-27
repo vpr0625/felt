@@ -8,3 +8,7 @@ window.FELT_FIREBASE = {
   messagingSenderId: "1062471098267",
   appId: "1:1062471098267:web:7aa574f1ffc0368a718b3e"
 };
+
+// GIF reactions in leagues. Paste your GIPHY API key between the quotes.
+// While it's empty, leagues still have emoji reactions, just no GIF button.
+window.FELT_GIPHY_KEY = "UJcyMLAjPq4gwPbseDjmlliEcVb3otK4";
