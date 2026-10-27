@@ -373,6 +373,13 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .also-sess { margin: 4px 0 12px; align-items: flex-start; }
 .also-sess input { margin-top: 2px; }
 .nw { white-space: nowrap; }
+.br-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 12px 40px 12px 14px; margin: 2px 0 12px; border-radius: 14px; border: 1px solid var(--fieldline); background: var(--field); }
+.br-card:active { background: var(--press); }
+.br-card .chev-r { position: absolute; right: 18px; top: 50%; margin-top: -5px; }
+.br-now { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.br-now.neg, .br-big.neg { color: var(--loss-t); }
+.br-hero { display: flex; flex-direction: column; align-items: center; margin: 4px 0 16px; }
+.br-big { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .pl { stroke-width: 2; }
 .pl.faded { stroke-opacity: .18; }
 .pl.hl { stroke-width: 3.25; }
@@ -482,7 +489,7 @@ const f1 = v => Math.round(v * 10) / 10;
 /* ---------------- data ---------------- */
 let storageOK = true;
 const defaultSettings = () => ({ cb: false, playerName: '', toLeague: true, alsoSession: false, theme: 'system', window: 10, keepAwake: true, anView: 'results', players: 9, filters: { type: '', start: '', end: '' } });
-const S = { sessions: [], seq: 0, live: null, leagues: [], leagueCur: '', leftLeagues: [], backupAt: 0, backupSnooze: 0, settings: defaultSettings() };
+const S = { sessions: [], seq: 0, live: null, bankroll: { on: false, start: 0, date: '', tx: [] }, leagues: [], leagueCur: '', leftLeagues: [], backupAt: 0, backupSnooze: 0, settings: defaultSettings() };
 let lgOpen = false;   // League tab: false shows your list of leagues, true shows the current league's page
 // S.league is the league currently shown. Setting it adds or switches to that league; setting null leaves the current one.
 Object.defineProperty(S, 'league', {
@@ -539,6 +546,12 @@ function ingest(d) {
       return o;
     });
     S.live = cleanLive(d.live);
+    const br = d.bankroll;
+    if (br && typeof br === 'object') S.bankroll = {
+      on: br.on === true && isISO(br.date), start: Number.isInteger(br.start) ? br.start : 0, date: isISO(br.date) ? br.date : '', sample: br.sample === true,
+      tx: (Array.isArray(br.tx) ? br.tx : []).filter(x => x && (x.kind === 'd' || x.kind === 'w') && Number.isInteger(x.c) && x.c > 0 && isISO(x.date))
+        .map(x => ({ id: typeof x.id === 'string' ? x.id : uid(), kind: x.kind, c: x.c, date: x.date, note: typeof x.note === 'string' ? x.note.slice(0, 80) : '', at: Number.isFinite(x.at) ? x.at : 0, sample: x.sample === true })),
+    };
     const okL = lg => lg && /^[A-Z0-9]{6}$/.test(lg.code) && typeof lg.player === 'string' && lg.player.trim();
     const cleanL = lg => { const o = { code: lg.code, name: String(lg.name || 'League').slice(0, 32), player: lg.player.slice(0, 24) }; if (typeof lg.type === 'string' && lg.type) o.type = lg.type.slice(0, 60); return o; };
     const list = Array.isArray(d.leagues) ? d.leagues : d.league ? [d.league] : [];   // older saves had a single league
@@ -564,7 +577,7 @@ function ingest(d) {
   }
 }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, seq: S.seq, sessions: S.sessions, live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings, backupAt: S.backupAt, backupSnooze: S.backupSnooze })); storageOK = true; }
+  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, seq: S.seq, sessions: S.sessions, live: S.live, bankroll: S.bankroll, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings, backupAt: S.backupAt, backupSnooze: S.backupSnooze })); storageOK = true; }
   catch (e) { storageOK = false; }
 }
 function uid() {
@@ -667,7 +680,7 @@ function homeHTML() {
   let streak = 0, dir = 0;
   for (let i = all.length - 1; i >= 0; i--) { const d = Math.sign(net(all[i])); if (!d) break; if (!dir) dir = d; if (d !== dir) break; streak++; }
   const recent = all.slice(-5).reverse();
-  return warnHTML() + liveCard + backupCardHTML() + `
+  return warnHTML() + liveCard + backupCardHTML() + bankrollCardHTML() + `
   <div class="home-stats">
     <div class="ls"><span class="ls-l">All time</span><span class="ls-v ${signCls(total)}">${usd(total, true)}</span></div>
     <div class="ls"><span class="ls-l">${yr}</span><span class="ls-v ${signCls(yrTotal)}">${thisYear.length ? usd(yrTotal, true) : '—'}</span></div>
@@ -841,12 +854,15 @@ function openSettings() {
     <h3>Appearance</h3>
     <div class="seg" role="group" aria-label="Appearance">${['system', 'light', 'dark'].map(v => `<button data-a="theme" data-v="${v}" aria-pressed="${th === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
     <label class="switch cb-switch"><input type="checkbox" id="cb-colors"${S.settings.cb ? ' checked' : ''}><span><b>Colorblind-friendly colors</b><br><span class="muted small">Shows wins in blue and losses in orange instead of green and red.</span></span></label>
+    <h3>Bankroll</h3>
+    <label class="switch cb-switch" style="margin-top:0"><input type="checkbox" id="br-on"${S.bankroll.on ? ' checked' : ''}><span><b>Track my bankroll</b><br><span class="muted small">Shows your bankroll on Home, with deposits and withdrawals. Your poker stats don’t change.</span></span></label>
+    ${S.bankroll.on ? '<div class="stack-btns"><button class="btn" data-a="br-open">Open bankroll</button></div>' : ''}
     <h3>Backup</h3>
     <p class="muted small">Save everything in one backup you can restore on any phone. ${S.backupAt ? `Last backup: ${fmtDate(new Date(S.backupAt).toISOString().slice(0, 10))}.` : 'You haven’t made a backup yet.'}</p>
     <button class="btn wide" data-a="backup-page">Back up or restore</button>
     <h3>Sample data</h3>
     ${S.sessions.some(s => s.sample) ? `<p class="muted small">${S.sessions.filter(s => s.sample).length} made-up sessions are loaded. Removing them doesn’t touch your own sessions.</p>
-    <button class="btn wide" data-a="sample-del">Remove sample sessions</button>` : `<p class="muted small">Adds six months of made-up sessions, with recorded hands for the last ten, so you can see how the charts and stats look. You can remove them anytime without touching your own sessions.</p>
+    <button class="btn wide" data-a="sample-del">Remove sample sessions</button>` : `<p class="muted small">Adds six months of made-up sessions, with recorded hands for the last ten and a sample bankroll, so you can see how the charts and stats look. You can remove them anytime without touching your own sessions.</p>
     <button class="btn wide" data-a="sample-add">Add sample sessions</button>`}
     <h3>Your sessions</h3>
     <p class="muted small">${n === 0 ? 'No sessions are saved yet.' : `${n} session${n === 1 ? ' is' : 's are'} saved on this device${nh ? `, with ${nh.toLocaleString('en-US')} recorded hands` : ''}.`} Sessions and hands export as separate CSV files you can open in Excel, Numbers or Google Sheets. Import sessions before hands.</p>
@@ -1416,6 +1432,7 @@ document.addEventListener('change', e => {
   } else if (id === 'f-date') updateForm();
   else if (id === 'f-league') lgPicked = true;
   else if (id === 'lf-type') { listType = e.target.value; $('#list-body').innerHTML = listBody(); }
+  else if (id === 'br-on') { if (e.target.checked) { if (S.bankroll.date) { S.bankroll.on = true; save(); render(); openBankroll(); toast('Bankroll tracking is back on.'); } else openBrSetup(true); } else A['br-off'](); }
   else if (id === 'cb-colors') { S.settings.cb = e.target.checked; save(); applyTheme(); if (tab === 'analytics' || tab === 'home') render(); }
   else if (id === 'lg-type' && S.league) { const l = S.league; if (e.target.value) l.type = e.target.value; else delete l.type; save(); toast(e.target.value ? `${l.name} is now linked to ${e.target.value}.` : `${l.name} isn’t linked to a session type.`); }
   else if (id === 'keep-awake') { S.settings.keepAwake = e.target.checked; save(); syncWakeLock(); }
@@ -1843,7 +1860,7 @@ function listBody() {
 /* ---------------- backup ---------------- */
 const realSessions = () => S.sessions.filter(s => !s.sample);
 function backupText() {
-  const data = { v: 1, seq: S.seq, sessions: realSessions(), live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings };
+  const data = { v: 1, seq: S.seq, sessions: realSessions(), live: S.live, bankroll: S.bankroll.sample ? { on: false, start: 0, date: '', tx: [] } : S.bankroll, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings };
   return JSON.stringify({ app: 'poker-tracker', version: 1, exported: new Date().toISOString(), data });
 }
 function markBackedUp() { S.backupAt = Date.now(); S.backupSnooze = 0; save(); }
@@ -1945,7 +1962,7 @@ Object.assign(A, {
   'bk-replace': () => {
     const d = pendingRestore; if (!d) return;
     const snap = JSON.stringify({ sessions: S.sessions, seq: S.seq, live: S.live, settings: S.settings });
-    S.sessions = []; S.live = null; S.seq = 0; S.leagues = []; S.leagueCur = ''; S.leftLeagues = []; S.settings = defaultSettings();
+    S.sessions = []; S.live = null; S.seq = 0; S.leagues = []; S.leagueCur = ''; S.leftLeagues = []; S.bankroll = { on: false, start: 0, date: '', tx: [] }; S.settings = defaultSettings();
     ingest(d); S.backupAt = Date.now(); pendingRestore = null;
     save(); applyTheme(); closeSheet(); tab = 'home'; render(); syncWakeLock(); lgStart();
     toast(`Backup restored: ${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'}.`, () => { const o = JSON.parse(snap); Object.assign(S, o); save(); applyTheme(); render(); });
@@ -2017,17 +2034,27 @@ function addSamples() {
     s.hands = hands;
   }
   for (const s of list) { delete s.start; S.sessions.push({ ...s, id: uid(), seq: ++S.seq }); }
+  if (!S.bankroll.date) {
+    const d0 = list[0].date, plus = n => { const d = new Date(tms(d0) + n * DAY); return iso(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); };
+    S.bankroll = { on: true, start: 100000, date: d0, sample: true, tx: [
+      { id: uid(), kind: 'd', c: 30000, date: plus(40), note: 'Topped up from savings', at: 1, sample: true },
+      { id: uid(), kind: 'w', c: 25000, date: plus(95), note: 'Cashed out for a weekend trip', at: 2, sample: true },
+      { id: uid(), kind: 'd', c: 20000, date: plus(130), note: 'Birthday money', at: 3, sample: true },
+    ] };
+  }
   return { n: list.length, hands: list.reduce((a, s) => a + (s.hands ? s.hands.length : 0), 0) };
 }
 Object.assign(A, {
   'sample-add': () => {
     const r = addSamples(); save(); closeSheet(); setTab('home');
-    toast(`Added ${r.n} sample sessions with ${r.hands} hands.`);
+    toast(`Added ${r.n} sample sessions with ${r.hands} hands${S.bankroll.sample ? ' and a sample bankroll' : ''}.`);
   },
   'sample-del': () => {
-    const snap = snapshot(), n = S.sessions.filter(s => s.sample).length;
-    S.sessions = S.sessions.filter(s => !s.sample); save(); closeSheet(); render();
-    toast(`Removed ${n} sample sessions.`, () => restore(snap));
+    const snap = snapshot(), brSnap = JSON.stringify(S.bankroll), n = S.sessions.filter(s => s.sample).length;
+    S.sessions = S.sessions.filter(s => !s.sample);
+    if (S.bankroll.sample) S.bankroll = { on: false, start: 0, date: '', tx: [] };
+    save(); closeSheet(); render();
+    toast(`Removed ${n} sample sessions.`, () => { S.bankroll = JSON.parse(brSnap); restore(snap); });
   },
 });
 
@@ -2754,6 +2781,132 @@ function drawLgBox(fig, P) {
 }
 Object.assign(A, {
   'lg-hl': t => { lgHL = lgHL === t.dataset.k ? '' : t.dataset.k; const fig = document.getElementById('lg-lines'); if (fig) drawLgLines(fig, lgPlayers()); },
+});
+
+/* ---------------- bankroll ---------------- */
+// Optional. Bankroll = starting amount + results of sessions on or after the start date + deposits - withdrawals.
+// It never changes your poker stats; deposits and withdrawals only affect the bankroll.
+const BR = () => S.bankroll;
+const brCounts = s => !s.sample || BR().sample;   // sample sessions only count toward a sample bankroll
+function brSessions() { const b = BR(); return sortedAsc().filter(s => brCounts(s) && s.date >= b.date); }
+function brTotals() {
+  const b = BR(), ses = brSessions();
+  const poker = ses.reduce((a, s) => a + net(s), 0);
+  const dep = b.tx.filter(t => t.kind === 'd').reduce((a, t) => a + t.c, 0), wd = b.tx.filter(t => t.kind === 'w').reduce((a, t) => a + t.c, 0);
+  return { start: b.start, poker, dep, wd, now: b.start + poker + dep - wd, ses };
+}
+// Typical buy-in for each game you've played lately, for the "covers N buy-ins" lines.
+function brCoverage(now) {
+  const recent = sortedAsc().filter(brCounts).slice(-30), by = new Map();
+  for (const s of recent) { const k = key(s.type); if (!by.has(k)) by.set(k, { name: s.type, list: [] }); by.get(k).list.push(s.buyIn); by.get(k).name = s.type; }
+  return [...by.values()].map(g => {
+    const counts = new Map(); g.list.filter(c => c > 0).forEach(c => counts.set(c, (counts.get(c) || 0) + 1));
+    let best = 0, bc = 0; for (const [c, n] of counts) if (n > bc || (n === bc && c < best)) { best = c; bc = n; }
+    return { name: g.name, n: g.list.length, buyIn: best };
+  }).filter(g => g.buyIn > 0).sort((a, b) => b.n - a.n).slice(0, 3).map(g => ({ ...g, covers: Math.floor(Math.max(0, now) / g.buyIn) }));
+}
+function bankrollCardHTML() {
+  if (!BR().on) return '';
+  const t = brTotals(), nd = t.dep - t.wd;
+  return `<button class="br-card" data-a="br-open"><span class="fig-label">Bankroll${BR().sample ? ' <span class="tag">Sample</span>' : ''}</span><span class="br-now ${t.now < 0 ? 'neg' : ''}">${usdC(t.now)}</span>
+    <span class="muted small">${moneyHTML(t.poker / 100)} from poker${nd ? `, ${nd > 0 ? `${usdC(nd)} deposited` : `${usdC(-nd)} withdrawn`}` : ''}</span><span class="chev-r" aria-hidden="true"></span></button>`;
+}
+function openBankroll() {
+  const b = BR(), t = brTotals(), cov = brCoverage(t.now);
+  const tx = b.tx.slice().sort((x, y) => x.date < y.date ? 1 : x.date > y.date ? -1 : y.at - x.at);
+  openSheet(`<div class="sheet-head"><span></span><h2>Bankroll</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body">
+    ${b.sample ? '<p class="muted small" style="margin-top:0">This is a sample bankroll that goes with the sample sessions. Change the starting bankroll to start tracking your own, or remove the sample sessions in Settings.</p>' : ''}
+    <div class="br-hero"><span class="muted small">Current bankroll</span><span class="br-big ${t.now < 0 ? 'neg' : ''}">${usdC(t.now)}</span></div>
+    <div class="two"><button class="btn primary" data-a="br-tx" data-k="d">Deposit</button><button class="btn" data-a="br-tx" data-k="w">Withdraw</button></div>
+    <table class="bt stats" style="margin-top:16px"><tbody>
+      <tr><td>Starting bankroll<div class="sub">${fmtDate(b.date)}</div></td><td>${usdC(t.start)}</td></tr>
+      <tr><td>Poker results<div class="sub">${t.ses.length} session${t.ses.length === 1 ? '' : 's'} since then</div></td><td>${moneyHTML(t.poker / 100)}</td></tr>
+      <tr><td>Deposits</td><td>${t.dep ? '+' + usdC(t.dep) : usdC(0)}</td></tr>
+      <tr><td>Withdrawals</td><td>${t.wd ? MINUS + usdC(t.wd) : usdC(0)}</td></tr>
+      <tr><td><b>Current bankroll</b></td><td><b>${usdC(t.now)}</b></td></tr>
+    </tbody></table>
+    ${cov.length ? `<h3>Buy-ins covered</h3><table class="bt stats"><tbody>${cov.map(c => `<tr><td>${esc(c.name)}<div class="sub">${usdShort(c.buyIn)} buy-in</div></td><td>${c.covers} buy-in${c.covers === 1 ? '' : 's'}</td></tr>`).join('')}</tbody></table>
+      <p class="muted small">How many of your usual buy-ins your bankroll could cover. Many players like to keep 20 or more for a game.</p>` : ''}
+    <figure id="br-chart" style="margin-top:18px"><div class="fig-head"><span class="fig-label">Bankroll over time</span></div><div class="chart" data-h="170"></div><div class="readout" aria-live="polite"></div></figure>
+    <h3>Deposits and withdrawals</h3>
+    ${tx.length ? `<table class="bt list"><tbody>${tx.map(x => `<tr data-a="br-tx-edit" data-id="${esc(x.id)}" tabindex="0"><td class="date">${fmtDate(x.date, x.date.slice(0, 4) !== todayISO().slice(0, 4))}</td><td><div class="ty">${x.kind === 'd' ? 'Deposit' : 'Withdrawal'}</div>${x.note ? `<div class="sub note-line">${esc(x.note)}</div>` : ''}</td><td class="num ${x.kind === 'd' ? 'pos' : 'neg'}">${x.kind === 'd' ? '+' : MINUS}${usdC(x.c)}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="muted small">None yet. Use Deposit when you add money for poker, and Withdraw when you take some out.</p>'}
+    <div class="stack-btns"><button class="btn" data-a="br-setup">Change starting bankroll</button></div>
+  </div>`);
+  drawBankrollChart();
+}
+function usdShort(c) { return c % 100 === 0 ? '$' + (c / 100).toLocaleString('en-US') : usdC(c); }
+function drawBankrollChart() {
+  const fig = $('#br-chart'); if (!fig) return;
+  const b = BR(), ev = [];
+  for (const s of brSessions()) ev.push({ d: s.date, c: net(s), what: `${s.type}, ${usdC(net(s), true)}` });
+  for (const x of b.tx) ev.push({ d: x.date < b.date ? b.date : x.date, c: x.kind === 'd' ? x.c : -x.c, what: `${x.kind === 'd' ? 'Deposit' : 'Withdrawal'}, ${x.kind === 'd' ? '+' : MINUS}${usdC(x.c)}` });
+  ev.sort((a, z) => a.d < z.d ? -1 : a.d > z.d ? 1 : 0);
+  let v = b.start; const pts = [{ t: tms(b.date), v: v / 100, d: b.date, what: 'Starting bankroll' }];
+  for (const e of ev) { v += e.c; pts.push({ t: tms(e.d), v: v / 100, d: e.d, what: e.what }); }
+  if (pts.length < 2) { fig.querySelector('.chart').innerHTML = '<p class="note">The chart starts once you log a session or a deposit.</p>'; fig.querySelector('.readout').innerHTML = ''; return; }
+  const el = fig.querySelector('.chart'), vs = pts.map(p => p.v);
+  const F = timeFrame(el, pts, Math.min(0, ...vs), Math.max(0, ...vs));
+  el.innerHTML = signedSeries(F, pts, 'Bankroll over time');
+  inspectTime(fig, pts, F, p => `<b>${fmtDate(p.d)}</b>, ${esc(p.what)}<br>Bankroll ${usd(p.v)}`);
+  fig.querySelector('.readout').innerHTML = 'Tap or drag the chart for details.';
+}
+function openBrSetup(first) {
+  const b = BR();
+  openSheet(`<div class="sheet-head"><button class="link" data-a="${first ? 'br-cancel' : 'br-open'}">${first ? 'Cancel' : 'Back'}</button><h2>${first ? 'Track your bankroll' : 'Starting bankroll'}</h2><button class="link strong" data-a="br-setup-save">Save</button></div>
+  <div class="sheet-body"><form id="brf" novalidate>
+    ${first ? '<p class="muted small" style="margin-top:0">Enter how much money you have set aside for poker. From then on, Felt adds your session results and any deposits or withdrawals.</p>' : ''}
+    <div class="two"><label class="field"><span>Starting bankroll</span><div class="money"><i>$</i><input type="text" id="br-start" inputmode="decimal" value="${b.start || first === false ? (b.start / 100).toFixed(2) : ''}" placeholder="0.00"></div></label>
+    <label class="field"><span>As of</span><input type="date" id="br-date" value="${b.date || todayISO()}"></label></div>
+    <p class="muted small">Sessions on or after this date count toward your bankroll. Earlier sessions are left out, since they’re already part of your starting amount.</p>
+    <p class="err" id="br-err" role="alert"></p>
+    ${first ? '' : '<div class="stack-btns"><button type="button" class="btn danger" data-a="br-off">Turn off bankroll tracking</button></div>'}
+  </form></div>`, { backdropCloses: false });
+}
+function openBrTx(kind, x) {
+  openSheet(`<div class="sheet-head"><button class="link" data-a="br-open">Back</button><h2>${x ? 'Edit' : kind === 'd' ? 'Deposit' : 'Withdraw'}</h2><button class="link strong" data-a="br-tx-save" data-k="${kind}"${x ? ` data-id="${esc(x.id)}"` : ''}>Save</button></div>
+  <div class="sheet-body"><form id="brt" novalidate>
+    ${x ? `<div class="seg two-up" role="group" aria-label="Type">${[['d', 'Deposit'], ['w', 'Withdrawal']].map(([k, l]) => `<button type="button" data-a="br-kind" data-k="${k}" aria-pressed="${kind === k}">${l}</button>`).join('')}</div>` : ''}
+    <div class="two"><label class="field"><span>Amount</span><div class="money"><i>$</i><input type="text" id="br-amt" inputmode="decimal" value="${x ? (x.c / 100).toFixed(2) : ''}" placeholder="0.00"></div></label>
+    <label class="field"><span>Date</span><input type="date" id="br-tx-date" value="${x ? x.date : todayISO()}"></label></div>
+    <label class="field"><span>Note (optional)</span><input type="text" id="br-note" value="${esc(x && x.note || '')}" maxlength="80" placeholder="${kind === 'd' ? 'Added from savings' : 'Cashed out for rent'}"></label>
+    <p class="err" id="br-err" role="alert"></p>
+    ${x ? `<div class="stack-btns"><button type="button" class="btn danger" data-a="br-tx-del" data-id="${esc(x.id)}">Delete</button></div>` : ''}
+  </form></div>`, { backdropCloses: false });
+}
+const brFail = m => { const e = $('#br-err'); if (e) e.textContent = m; };
+Object.assign(A, {
+  'br-open': () => openBankroll(),
+  'br-setup': () => openBrSetup(false),
+  'br-cancel': () => { closeSheet(); const c = $('#br-on'); if (c) c.checked = false; if (!$('#backdrop').hidden) closeSheet(); openSettings(); },
+  'br-setup-save': () => {
+    const c = parseMoney($('#br-start').value), d = $('#br-date').value, b = BR(), first = !b.on;
+    if (c == null) return brFail('Enter your starting bankroll, like 500. Enter 0 to start from nothing.');
+    if (!isISO(d)) return brFail('Pick the date your starting bankroll is from.');
+    if (b.sample) { b.tx = b.tx.filter(x => !x.sample); delete b.sample; }
+    Object.assign(b, { on: true, start: c, date: d }); save();
+    render(); openBankroll(); toast(first ? 'Bankroll tracking is on. It shows on Home.' : 'Starting bankroll updated.');
+  },
+  'br-off': () => { BR().on = false; save(); closeSheet(); render(); toast('Bankroll tracking is off. Your deposits and withdrawals are kept if you turn it back on.'); },
+  'br-tx': t => openBrTx(t.dataset.k, null),
+  'br-tx-edit': t => { const x = BR().tx.find(y => y.id === t.dataset.id); if (x) openBrTx(x.kind, x); },
+  'br-kind': t => { document.querySelectorAll('[data-a="br-kind"]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); $('[data-a="br-tx-save"]').dataset.k = t.dataset.k; },
+  'br-tx-save': t => {
+    const c = parseMoney($('#br-amt').value), d = $('#br-tx-date').value, note = $('#br-note').value.trim().slice(0, 80), kind = t.dataset.k;
+    if (c == null || c <= 0) return brFail('Enter the amount, like 100.');
+    if (!isISO(d)) return brFail('Pick a date.');
+    const b = BR();
+    if (t.dataset.id) { const x = b.tx.find(y => y.id === t.dataset.id); Object.assign(x, { kind, c, date: d, note }); }
+    else b.tx.push({ id: uid(), kind, c, date: d, note, at: Date.now() });
+    save(); render(); openBankroll();
+    toast(t.dataset.id ? 'Updated.' : `${kind === 'd' ? 'Deposit' : 'Withdrawal'} of ${usdC(c)} saved.`);
+  },
+  'br-tx-del': t => {
+    const b = BR(), x = b.tx.find(y => y.id === t.dataset.id); if (!x) return;
+    b.tx = b.tx.filter(y => y !== x); save(); render(); openBankroll();
+    toast(`${x.kind === 'd' ? 'Deposit' : 'Withdrawal'} deleted.`, () => { b.tx.push(x); save(); render(); if (!$('#backdrop').hidden) openBankroll(); });
+  },
 });
 
 /* ---------------- start ---------------- */
