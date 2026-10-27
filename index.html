@@ -632,7 +632,7 @@ function sessionsHTML() {
   const types = typesAlpha();
   if (listType && !types.some(t => key(t.name) === key(listType))) listType = '';
   return warnHTML() + `<div class="list-filter">
-    <input type="search" id="lf-q" value="${esc(listQ)}" placeholder="Search sessions" aria-label="Search sessions and notes" autocomplete="off" enterkeyhint="search">
+    <input type="search" id="lf-q" value="${esc(listQ)}" placeholder="Search sessions" aria-label="Search sessions and notes" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
     ${types.length > 1 ? `<div class="select"><select id="lf-type" aria-label="Session type"><option value="">All types</option>${types.map(t => `<option value="${esc(t.name)}"${key(t.name) === key(listType) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>` : ''}
   </div><div id="list-body">${listBody()}</div>`;
 }
@@ -689,7 +689,7 @@ function openSessionForm(id, fromLive = false) {
     <label class="field"><span>Date</span><input type="date" id="f-date" value="${v.date}" max="2100-12-31"></label>
     <div class="field"><span id="l-type">Session type</span>
       ${chips ? `<div class="chips" role="group" aria-labelledby="l-type">${chips}</div>` : ''}
-      <input type="text" id="f-type" value="${esc(v.type)}" autocomplete="off" autocapitalize="words" enterkeyhint="next" aria-labelledby="l-type" placeholder="Home game, casino, league…" maxlength="60">
+      <input type="text" id="f-type" value="${esc(v.type)}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-f-type" enterkeyhint="next" aria-labelledby="l-type" placeholder="Home game, casino, league…" maxlength="60">
     </div>
     <div class="two">
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="f-buyin" inputmode="decimal" value="${v.buyIn}" placeholder="0.00" enterkeyhint="next"></div></label>
@@ -1441,7 +1441,7 @@ function liveStartHTML() {
     <p class="lede">Keep the app open while you play. Log each buy-in as you make it, and each hand’s cards and pre-flop action. When you’re done, enter your ending stack to save the session.</p>
     <div class="field"><span id="l-ls-type">Session type</span>
       ${chips ? `<div class="chips" role="group" aria-labelledby="l-ls-type">${chips}</div>` : ''}
-      <input type="text" id="ls-type" value="${esc(recent[0] ? recent[0].name : '')}" autocomplete="off" autocapitalize="words" enterkeyhint="next" aria-labelledby="l-ls-type" placeholder="Home game, casino, league…" maxlength="60">
+      <input type="text" id="ls-type" value="${esc(recent[0] ? recent[0].name : '')}" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" name="felt-ls-type" enterkeyhint="next" aria-labelledby="l-ls-type" placeholder="Home game, casino, league…" maxlength="60">
     </div>
     <label class="field"><span>First buy-in</span><div class="money"><i>$</i><input type="text" id="ls-buyin" inputmode="decimal" placeholder="0.00" enterkeyhint="go"></div></label>
     <p class="err" id="ls-err" role="alert"></p>
@@ -2128,15 +2128,15 @@ function openJoin(step = 'code', code = '', note = '') {
     <p class="muted small">Ask whoever started the league for its 6-character code.</p><p class="err" id="lg-err" role="alert">${esc(note)}</p></div>`, { backdropCloses: false });
   } else {
     openSheet(`<div class="sheet-head"><button class="link" data-a="lg-join-open">Back</button><h2>${esc(pendingLeague.name)}</h2><button class="link strong" data-a="lg-join-do">Join</button></div>
-    <div class="sheet-body"><label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+    <div class="sheet-body"><label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
     <p class="muted small" id="lg-name-note"></p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
   }
 }
 let pendingLeague = null, lgEditing = null;
 function openCreate() {
   openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Start a league</h2><button class="link strong" data-a="lg-create-do">Start</button></div>
-  <div class="sheet-body"><label class="field"><span>League name</span><input type="text" id="lg-lname" autocapitalize="words" autocomplete="off" maxlength="32" placeholder="Friday Night League" enterkeyhint="next"></label>
-  <label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
+  <div class="sheet-body"><label class="field"><span>League name</span><input type="text" id="lg-lname" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-league-name" maxlength="32" placeholder="Friday Night League" enterkeyhint="next"></label>
+  <label class="field"><span>Your name in this league</span><input type="text" id="lg-name" value="${esc(lastPlayer())}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" name="felt-player" maxlength="24" placeholder="What your friends call you" enterkeyhint="done"></label>
   <p class="muted small">You’ll get a code to share with your friends so they can join.</p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
 }
 function openResultForm(r) {
