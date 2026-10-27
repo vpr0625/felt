@@ -348,6 +348,13 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .rx-who { margin-top: 10px; }
 .lg-switch { margin: 4px 0 12px; }
 .nw { white-space: nowrap; }
+.recent-left { margin-top: 24px; }
+.recent-left h3 { margin: 0 0 6px; font-size: 16px; }
+.left-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--hair); }
+.left-row:last-of-type { border-bottom: 1px solid var(--hair); }
+.left-txt { display: flex; flex-direction: column; min-width: 0; }
+.left-txt b { overflow-wrap: anywhere; }
+.left-row .btn { min-height: 40px; padding: 8px 14px; flex: none; }
 
 /* home */
 figure.compact { padding: 12px 12px 8px; }
@@ -426,11 +433,12 @@ const f1 = v => Math.round(v * 10) / 10;
 /* ---------------- data ---------------- */
 let storageOK = true;
 const defaultSettings = () => ({ cb: false, playerName: '', toLeague: true, theme: 'system', window: 10, keepAwake: true, anView: 'results', players: 9, filters: { type: '', start: '', end: '' } });
-const S = { sessions: [], seq: 0, live: null, leagues: [], leagueCur: '', backupAt: 0, backupSnooze: 0, settings: defaultSettings() };
+const S = { sessions: [], seq: 0, live: null, leagues: [], leagueCur: '', leftLeagues: [], backupAt: 0, backupSnooze: 0, settings: defaultSettings() };
 // S.league is the league currently shown. Setting it adds or switches to that league; setting null leaves the current one.
 Object.defineProperty(S, 'league', {
   get() { return S.leagues.find(l => l.code === S.leagueCur) || S.leagues[0] || null; },
   set(v) {
+    if (v) S.leftLeagues = S.leftLeagues.filter(l => l.code !== v.code);
     if (v) { const i = S.leagues.findIndex(l => l.code === v.code); if (i >= 0) S.leagues[i] = { ...S.leagues[i], ...v }; else S.leagues.push(v); S.leagueCur = v.code; }
     else { const cur = S.league; S.leagues = S.leagues.filter(l => l !== cur); S.leagueCur = S.leagues[0] ? S.leagues[0].code : ''; }
   },
@@ -485,6 +493,8 @@ function ingest(d) {
     const list = Array.isArray(d.leagues) ? d.leagues : d.league ? [d.league] : [];   // older saves had a single league
     S.leagues = list.filter(okL).map(cleanL).filter((l, i, a) => a.findIndex(x => x.code === l.code) === i);
     S.leagueCur = S.leagues.some(l => l.code === d.leagueCur) ? d.leagueCur : (S.leagues[0] ? S.leagues[0].code : '');
+    S.leftLeagues = (Array.isArray(d.leftLeagues) ? d.leftLeagues : []).filter(okL).map(l => ({ ...cleanL(l), leftAt: Number.isFinite(l.leftAt) ? l.leftAt : 0 }))
+      .filter(l => !S.leagues.some(x => x.code === l.code)).slice(0, 10);
     S.seq = Math.max(Number(d.seq) || 0, 0, ...S.sessions.map(s => s.seq));
     const st = d.settings;
     if (st && typeof st === 'object') {
@@ -502,7 +512,7 @@ function ingest(d) {
   }
 }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, seq: S.seq, sessions: S.sessions, live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, settings: S.settings, backupAt: S.backupAt, backupSnooze: S.backupSnooze })); storageOK = true; }
+  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, seq: S.seq, sessions: S.sessions, live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings, backupAt: S.backupAt, backupSnooze: S.backupSnooze })); storageOK = true; }
   catch (e) { storageOK = false; }
 }
 function uid() {
@@ -1780,7 +1790,7 @@ function listBody() {
 /* ---------------- backup ---------------- */
 const realSessions = () => S.sessions.filter(s => !s.sample);
 function backupText() {
-  const data = { v: 1, seq: S.seq, sessions: realSessions(), live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, settings: S.settings };
+  const data = { v: 1, seq: S.seq, sessions: realSessions(), live: S.live, leagues: S.leagues, leagueCur: S.leagueCur, leftLeagues: S.leftLeagues, settings: S.settings };
   return JSON.stringify({ app: 'poker-tracker', version: 1, exported: new Date().toISOString(), data });
 }
 function markBackedUp() { S.backupAt = Date.now(); S.backupSnooze = 0; save(); }
@@ -1798,10 +1808,10 @@ function openBackup() {
   const n = realSessions().length, nh = realSessions().reduce((a, s) => a + (s.hands ? s.hands.length : 0), 0);
   openSheet(`<div class="sheet-head"><button class="link" data-a="settings">Back</button><h2>Backup</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body">
-    <p class="muted small">One backup holds all your sessions${nh ? `, their ${nh.toLocaleString('en-US')} hands` : ''} and your settings${S.live ? ', plus the live session in progress' : ''}. Sample sessions aren’t included. ${S.backupAt ? `Last backup: ${fmtDate(new Date(S.backupAt).toISOString().slice(0, 10))}.` : 'You haven’t made a backup yet.'}</p>
+    <p class="muted small">One backup holds all your sessions${nh ? `, their ${nh.toLocaleString('en-US')} hands` : ''}, your leagues and your settings${S.live ? ', plus the live session in progress' : ''}. Sample sessions aren’t included. ${S.backupAt ? `Last backup: ${fmtDate(new Date(S.backupAt).toISOString().slice(0, 10))}.` : 'You haven’t made a backup yet.'}</p>
     <div class="stack-btns">
-      <button class="btn primary" data-a="bk-notes"${n || S.live ? '' : ' disabled'}>Save to Notes</button>
-      <button class="btn" data-a="bk-file"${n || S.live ? '' : ' disabled'}>Save as a file</button>
+      <button class="btn primary" data-a="bk-notes"${n || S.live || S.leagues.length || S.leftLeagues.length ? '' : ' disabled'}>Save to Notes</button>
+      <button class="btn" data-a="bk-file"${n || S.live || S.leagues.length || S.leftLeagues.length ? '' : ' disabled'}>Save as a file</button>
     </div>
     <p class="muted small" style="margin-top:10px">Save to Notes copies the backup as text, so you can paste it into a note. Save as a file lets you keep it in Files or iCloud Drive.</p>
     <h3>Restore</h3>
@@ -1882,7 +1892,7 @@ Object.assign(A, {
   'bk-replace': () => {
     const d = pendingRestore; if (!d) return;
     const snap = JSON.stringify({ sessions: S.sessions, seq: S.seq, live: S.live, settings: S.settings });
-    S.sessions = []; S.live = null; S.seq = 0; S.leagues = []; S.leagueCur = ''; S.settings = defaultSettings();
+    S.sessions = []; S.live = null; S.seq = 0; S.leagues = []; S.leagueCur = ''; S.leftLeagues = []; S.settings = defaultSettings();
     ingest(d); S.backupAt = Date.now(); pendingRestore = null;
     save(); applyTheme(); closeSheet(); tab = 'home'; render(); syncWakeLock(); lgStart();
     toast(`Backup restored: ${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'}.`, () => { const o = JSON.parse(snap); Object.assign(S, o); save(); applyTheme(); render(); });
@@ -2085,7 +2095,7 @@ function leagueHTML() {
   if (!S.league) {
     return `<div class="lg-intro"><p class="lede">Play in a league with friends. Everyone logs their own results, the standings update for the whole group, and you can react to each other’s nights.</p>
       <div class="stack-btns"><button class="btn primary" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>
-      <p class="muted small" style="margin-top:16px">Only the results you add to the league are shared. Your own sessions, notes and hands stay on this phone.</p></div>`;
+      <p class="muted small" style="margin-top:16px">Only the results you add to the league are shared. Your own sessions, notes and hands stay on this phone.</p>${recentHTML()}</div>`;
   }
   const lg = S.league;
   let h = `<div class="lg-head"><button class="lg-title lg-switcher" data-a="lg-switch-open" aria-label="Switch league"><div class="live-type">${esc(lg.name)} <span class="chev" aria-hidden="true"></span></div><div class="muted small">Playing as ${esc(lg.player)}, code <b class="code">${esc(lg.code)}</b></div></button>
@@ -2127,10 +2137,17 @@ const lgFoot = () => {
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
 };
+function recentHTML() {
+  if (!S.leftLeagues.length) return '';
+  return `<div class="recent-left"><div class="recent-head"><h3>Recently left</h3><button class="link" data-a="lg-left-clear">Clear</button></div>
+    ${S.leftLeagues.map(l => `<div class="left-row"><div class="left-txt"><b>${esc(l.name)}</b><span class="muted small">Code <span class="code">${esc(l.code)}</span>${l.leftAt ? `, left ${fmtDate(new Date(l.leftAt).toISOString().slice(0, 10), false)}` : ''}</span></div>
+      <button class="btn" data-a="lg-rejoin-left" data-code="${esc(l.code)}">Rejoin</button></div>`).join('')}
+    <p class="muted small">Rejoining from this phone keeps your name${S.leftLeagues.length ? ', and organizer rights if you started the league' : ''}.</p></div>`;
+}
 function openSwitcher() {
   openSheet(`<div class="sheet-head"><span></span><h2>Your leagues</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><div class="add-menu">${S.leagues.map(l => `<button class="add-opt${l.code === S.league.code ? ' cur' : ''}" data-a="lg-switch" data-code="${l.code}" aria-pressed="${l.code === S.league.code}"><b>${esc(l.name)}</b><span class="muted small">Playing as ${esc(l.player)}${l.type ? `, for ${esc(l.type)}` : ''}</span></button>`).join('')}</div>
-  <div class="stack-btns"><button class="btn" data-a="lg-join-open">Join another league</button><button class="btn" data-a="lg-create-open">Start another league</button></div></div>`);
+  <div class="stack-btns"><button class="btn" data-a="lg-join-open">Join another league</button><button class="btn" data-a="lg-create-open">Start another league</button></div>${recentHTML()}</div>`);
 }
 function lgCode() { let c = ''; const a = new Uint32Array(6); crypto.getRandomValues(a); for (const v of a) c += LG_CODE_CHARS[v % LG_CODE_CHARS.length]; return c; }
 const lastPlayer = () => (S.league && S.league.player) || S.settings.playerName || '';
@@ -2309,8 +2326,24 @@ Object.assign(A, {
       if (code && wipe) await be.deleteResults(code, LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id));
       if (code) await be.removeMember(code);
     } catch (e) { if (wipe) { toast('Couldn’t delete your results. Check your connection and try again.'); return; } }
-    S.league = null; save(); lgStart(); closeSheet(); renderLeague(); toast(wipe ? `You left ${gone} and deleted your results.` : `You left ${gone}.`);
+    const left = S.league;
+    S.league = null;
+    if (left) S.leftLeagues = [{ ...left, leftAt: Date.now() }, ...S.leftLeagues.filter(l => l.code !== left.code)].slice(0, 10);
+    save(); lgStart(); closeSheet(); renderLeague(); toast(wipe ? `You left ${gone} and deleted your results. You can rejoin from Recently left.` : `You left ${gone}. You can rejoin from Recently left.`);
   },
+  'lg-rejoin-left': async t => {
+    const l = S.leftLeagues.find(x => x.code === t.dataset.code); if (!l) return;
+    t.disabled = true;
+    try {
+      const be = await lgBackend(), lg = await be.getLeague(l.code);
+      if (!lg) { S.leftLeagues = S.leftLeagues.filter(x => x.code !== l.code); save(); if (!$('#backdrop').hidden) openSwitcher(); renderLeague(); toast(`${l.name} was deleted by its organizer.`); return; }
+      await be.setMember(l.code, l.player);
+      const { leftAt, ...keep } = l;
+      S.league = { ...keep, name: lg.name }; save(); closeSheet(); lgStart(); renderLeague(); window.scrollTo(0, 0);
+      toast(`You’re back in ${lg.name}${lg.createdBy === be.uid ? ' as its organizer' : ''}.`);
+    } catch (e) { t.disabled = false; toast('Couldn’t rejoin right now. Check your connection and try again.'); }
+  },
+  'lg-left-clear': () => { S.leftLeagues = []; save(); if (!$('#backdrop').hidden) openSwitcher(); renderLeague(); },
   'lg-forget': () => { S.league = null; save(); lgStart(); renderLeague(); toast('Removed from this phone.'); },
   'lg-delete': () => {
     const lg = S.league, nights = new Set(LGD.results.map(r => r.date)).size;
