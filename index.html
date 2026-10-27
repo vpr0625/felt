@@ -354,12 +354,20 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 .gif-reacts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .gif-react { margin: 0; padding: 0; border: 0; background: none; }
 .gif-react img { width: 100%; height: 120px; object-fit: cover; border-radius: 12px; display: block; background: var(--field); }
+.gif-react .gif-gone { display: block; height: 120px; display: grid; place-items: center; }
 .gif-react figcaption { font-size: 13px; color: var(--ink2); margin-top: 4px; text-align: left; }
 .gif-react.mine img { box-shadow: 0 0 0 2px var(--accent); }
 .gif-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 12px; min-height: 120px; }
 .gif-grid .note { grid-column: 1 / -1; }
-.gif-cell { padding: 0; border: 0; background: var(--field); border-radius: 10px; overflow: hidden; aspect-ratio: 1; }
+.gif-cell { display: block; width: 100%; padding: 0; border: 0; background: var(--field); border-radius: 10px; overflow: hidden; aspect-ratio: 1; }
 .gif-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gif-tile { min-width: 0; }
+.gif-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; margin-top: 3px; font-size: 12px; }
+.gif-meta .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gif-grid .gif-cell img.loading, .gif-react img.loading, .rx-gif.loading { background: var(--field); }
+.gif-gone { font-size: 12px; color: var(--ink2); padding: 2px 6px; border: 1px dashed var(--fieldline); border-radius: 6px; }
+.gif-full { width: 100%; height: 120px; object-fit: cover; border-radius: 12px; display: block; background: var(--field); }
+#gif-q { margin-top: 2px; }
 .giphy-mark { text-align: center; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink2); margin: 12px 0 0; }
 .lg-switch { margin: 4px 0 12px; }
 .nw { white-space: nowrap; }
@@ -454,6 +462,7 @@ figure.compact .readout { min-height: 2.6em; margin-top: 4px; font-size: 13px; }
 </nav>
 <div id="backdrop" class="backdrop" hidden><div id="sheet" class="sheet" role="dialog" aria-modal="true" tabindex="-1"></div></div>
 <div id="toast" class="toast" role="status" hidden></div>
+<input type="file" id="gif-file" accept="image/gif,image/webp,image/png,image/jpeg" hidden>
 <input type="file" id="backup-in" accept=".json,application/json,text/plain" hidden>
 <input type="file" id="file-in" accept=".csv,text/csv,text/comma-separated-values,text/plain" hidden>
 
@@ -621,7 +630,7 @@ function render() {
   if (tab === 'home') { $('#main').innerHTML = homeHTML(); drawHome(); }
   else if (tab === 'sessions') $('#main').innerHTML = sessionsHTML();
   else if (tab === 'live') $('#main').innerHTML = liveHTML();
-  else if (tab === 'league') { $('#main').innerHTML = leagueHTML(); if (lgOpen && lgView === 'standings') drawLeagueCharts(); }
+  else if (tab === 'league') { $('#main').innerHTML = leagueHTML(); if (lgOpen && lgView === 'standings') drawLeagueCharts(); hydrateGifs($('#main')); }
   else { $('#main').innerHTML = analyticsHTML(); renderResults(); }
 }
 function setTab(t) { tab = t; render(); window.scrollTo(0, 0); }
@@ -2081,7 +2090,32 @@ async function fbBackend() {
       for (let i = 0; i < ids.length; i += 10) { const b = F.writeBatch(db); ids.slice(i, i + 10).forEach(id => b.delete(F.doc(db, 'leagues', code, 'results', id))); await b.commit(); }
     },
     // Organizer only: results first, then members, then the league itself (the rules check the league to confirm the organizer).
+    async listGifs(code) {
+      const q = await F.getDocs(F.collection(db, 'leagues', code, 'gifs'));
+      return q.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0));
+    },
+    async getGifData(code, id) {
+      const ref = F.doc(db, 'leagues', code, 'gifdata', id);
+      let d = null;
+      try { d = await F.getDocFromCache(ref); } catch (e) {}
+      if (!d || !d.exists()) d = await F.getDoc(ref);   // downloaded once, then kept on the phone
+      return d.exists() ? d.data() : null;
+    },
+    async addGif(code, meta, type, data) {
+      const ref = F.doc(F.collection(db, 'leagues', code, 'gifs')), b = F.writeBatch(db);
+      b.set(ref, { ...meta, uid: user.uid, createdAt: F.serverTimestamp() });
+      b.set(F.doc(db, 'leagues', code, 'gifdata', ref.id), { uid: user.uid, type, data });
+      await b.commit();
+      return ref.id;
+    },
+    async deleteGif(code, id) {
+      const b = F.writeBatch(db);
+      b.delete(F.doc(db, 'leagues', code, 'gifs', id)); b.delete(F.doc(db, 'leagues', code, 'gifdata', id));
+      await b.commit();
+    },
     async deleteLeague(code, resultIds, memberIds) {
+      const gifIds = (await this.listGifs(code)).map(g => g.id);
+      for (let i = 0; i < gifIds.length; i += 5) { const b = F.writeBatch(db); gifIds.slice(i, i + 5).forEach(id => { b.delete(F.doc(db, 'leagues', code, 'gifs', id)); b.delete(F.doc(db, 'leagues', code, 'gifdata', id)); }); await b.commit(); }
       await this.deleteResults(code, resultIds);
       for (let i = 0; i < memberIds.length; i += 10) { const b = F.writeBatch(db); memberIds.slice(i, i + 10).forEach(id => b.delete(F.doc(db, 'leagues', code, 'members', id))); await b.commit(); }
       await F.deleteDoc(L(code));
@@ -2123,15 +2157,19 @@ function lgStandings() {
   }
   return [...m.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
-const GIF_RE = /^gif:([A-Za-z0-9]{5,40})$/;
+const GIF_RE = /^gif:([A-Za-z0-9]{5,40})$/, LGIF_RE = /^lgif:([A-Za-z0-9]{10,40})$/;
+const lgifId = v => { const m = LGIF_RE.exec(v || ''); return m ? m[1] : null; };
+const isGifReact = v => !!(gifId(v) || lgifId(v));
+// Image for a GIF reaction: GIPHY by address, league GIFs filled in after they load (see hydrateGifs).
+const gifImg = (v, cls, alt) => lgifId(v) ? `<img class="${cls}" data-lgif="${lgifId(v)}" alt="${esc(alt)}">` : `<img class="${cls}" src="${gifURL(gifId(v), cls === 'rx-gif')}" alt="${esc(alt)}" loading="lazy">`;
 const gifId = v => { const m = GIF_RE.exec(v || ''); return m ? m[1] : null; };
 const gifURL = (id, small) => `https://media.giphy.com/media/${id}/${small ? '100w' : '200w'}.gif`;
 const giphyKey = () => (window.FELT_GIPHY_KEY || '').trim();
 function reactionChips(r) {
   const counts = new Map(), gifs = [], mineV = (r.reactions || {})[LGD.uid];
-  for (const e of Object.values(r.reactions || {})) { const g = gifId(e); if (g) gifs.push(g); else if (REACTIONS.includes(e)) counts.set(e, (counts.get(e) || 0) + 1); }
+  for (const e of Object.values(r.reactions || {})) { if (isGifReact(e)) gifs.push(e); else if (REACTIONS.includes(e)) counts.set(e, (counts.get(e) || 0) + 1); }
   if (!counts.size && !gifs.length) return '';
-  return `<div class="rx">${[...counts].map(([e, n]) => `<span class="rx-chip${mineV === e ? ' mine' : ''}">${e} ${n}</span>`).join('')}${gifs.slice(0, 3).map(g => `<img class="rx-gif" src="${gifURL(g, true)}" alt="GIF reaction" loading="lazy">`).join('')}${gifs.length > 3 ? `<span class="rx-chip">+${gifs.length - 3}</span>` : ''}</div>`;
+  return `<div class="rx">${[...counts].map(([e, n]) => `<span class="rx-chip${mineV === e ? ' mine' : ''}">${e} ${n}</span>`).join('')}${gifs.slice(0, 3).map(v => gifImg(v, 'rx-gif', 'GIF reaction')).join('')}${gifs.length > 3 ? `<span class="rx-chip">+${gifs.length - 3}</span>` : ''}</div>`;
 }
 // Name for whoever reacted: their member name, or the name on their results if they've since left.
 function reactorName(u) {
@@ -2199,7 +2237,8 @@ const lgFoot = () => {
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
     <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
-    <p class="muted small">Changing it also updates the name on your past results.</p></section>
+    <p class="muted small">Changing it also updates the name on your past results.</p>
+    <div class="stack-btns"><button class="btn" data-a="lg-pack">League GIFs</button></div></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
 };
@@ -2256,14 +2295,14 @@ function openResult(id) {
   const mine = r.uid === LGD.uid, organizer = LGD.league && LGD.league.createdBy === LGD.uid;
   const entries = Object.entries(r.reactions || {}), mineV = (r.reactions || {})[LGD.uid];
   const who = entries.filter(([, e]) => REACTIONS.includes(e)).map(([u, e]) => `${e} ${esc(reactorName(u))}`);
-  const gifs = entries.filter(([, e]) => gifId(e)).map(([u, e]) => ({ u, g: gifId(e) }));
+  const gifs = entries.filter(([, e]) => isGifReact(e)).map(([u, e]) => ({ u, v: e }));
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(r.player)}</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><div class="muted small">${fmtDate(r.date)}</div>
     <div class="live-stats det-stats"><div class="ls"><span class="ls-l">In</span><span class="ls-v">${usdC(r.buyIn)}</span></div><div class="ls"><span class="ls-l">Out</span><span class="ls-v">${usdC(r.cashOut)}</span></div><div class="ls"><span class="ls-l">Net</span><span class="ls-v ${signCls(lgNet(r) / 100)}">${usdC(lgNet(r), true)}</span></div></div>
     <p class="label">React</p>
-    <div class="rx-pick${giphyKey() ? ' with-gif' : ''}" role="group" aria-label="React">${REACTIONS.map(e => `<button data-a="lg-react" data-id="${esc(r.id)}" data-v="${e}" aria-pressed="${mineV === e}">${e}</button>`).join('')}${giphyKey() ? `<button class="gif-btn" data-a="lg-gif-open" data-id="${esc(r.id)}" aria-pressed="${!!gifId(mineV)}">GIF</button>` : ''}</div>
+    <div class="rx-pick with-gif" role="group" aria-label="React">${REACTIONS.map(e => `<button data-a="lg-react" data-id="${esc(r.id)}" data-v="${e}" aria-pressed="${mineV === e}">${e}</button>`).join('')}<button class="gif-btn" data-a="lg-gif-open" data-id="${esc(r.id)}" aria-pressed="${isGifReact(mineV)}">GIF</button></div>
     ${who.length ? `<p class="muted small rx-who">${who.join(', ')}</p>` : ''}
-    ${gifs.length ? `<div class="gif-reacts">${gifs.map(x => `<figure class="gif-react${x.u === LGD.uid ? ' mine' : ''}"><img src="${gifURL(x.g)}" alt="GIF from ${esc(reactorName(x.u))}" loading="lazy"><figcaption>${esc(reactorName(x.u))}${x.u === LGD.uid ? ` <button class="link inline" data-a="lg-react" data-id="${esc(r.id)}" data-v="${esc(mineV)}">Remove</button>` : ''}</figcaption></figure>`).join('')}</div>` : ''}
+    ${gifs.length ? `<div class="gif-reacts">${gifs.map(x => `<figure class="gif-react${x.u === LGD.uid ? ' mine' : ''}">${gifImg(x.v, 'gif-full', 'GIF from ' + reactorName(x.u))}<figcaption>${esc(reactorName(x.u))}${x.u === LGD.uid ? ` <button class="link inline" data-a="lg-react" data-id="${esc(r.id)}" data-v="${esc(mineV)}">Remove</button>` : ''}</figcaption></figure>`).join('')}</div>` : ''}
     ${mine ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit my result</button></div>` : organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You started this league, so you can remove results that were added by mistake.</p>` : ''}
   </div>`);
 }
@@ -2440,17 +2479,113 @@ Object.assign(A, {
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
 
+/* ---------------- league GIF pack ---------------- */
+const LGIF_TYPES = ['image/gif', 'image/webp', 'image/png', 'image/jpeg'], LGIF_MAX = 500 * 1024;
+const lgifCache = new Map();   // id -> data URL (or '' if it was removed)
+function hydrateGifs(root = document) {
+  root.querySelectorAll('img[data-lgif]:not([src])').forEach(img => {
+    const id = img.dataset.lgif;
+    const put = u => { if (u) img.src = u; else { img.replaceWith(Object.assign(document.createElement('span'), { className: 'gif-gone', textContent: 'GIF removed' })); } };
+    if (lgifCache.has(id)) return put(lgifCache.get(id));
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';   // blank while loading
+    img.classList.add('loading');
+    lgBackend().then(be => be.getGifData(S.league.code, id)).then(d => {
+      const ok = d && LGIF_TYPES.includes(d.type) && typeof d.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(d.data);
+      const u = ok ? `data:${d.type};base64,${d.data}` : '';
+      lgifCache.set(id, u); img.classList.remove('loading'); put(u);
+    }).catch(() => img.classList.remove('loading'));
+  });
+}
+const _renderLeague = renderLeague;
+renderLeague = function () { _renderLeague(); hydrateGifs($('#main')); };
+const _openResult = openResult;
+openResult = function (id) { _openResult(id); hydrateGifs($('#sheet')); };
+function b64(buf) { let s = ''; const a = new Uint8Array(buf); for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); }
+// Photos get shrunk to fit; GIFs keep their animation, so they must already be small enough.
+async function prepGif(file) {
+  if (!LGIF_TYPES.includes(file.type)) throw new Error('Pick a GIF, or a JPG, PNG or WebP image.');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('That file couldn’t be opened as an image.')); i.src = url; });
+    if (file.type === 'image/gif' || file.type === 'image/webp') {
+      if (file.size > LGIF_MAX) throw new Error(`That GIF is ${Math.round(file.size / 1024)} KB. League GIFs can be up to 500 KB, so try a shorter or smaller one.`);
+      return { type: file.type, data: b64(await file.arrayBuffer()), w: img.naturalWidth, h: img.naturalHeight, size: file.size };
+    }
+    const scale = Math.min(1, 480 / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    let q = 0.85, out = c.toDataURL('image/jpeg', q);
+    while (out.length * 0.75 > LGIF_MAX && q > 0.4) { q -= 0.15; out = c.toDataURL('image/jpeg', q); }
+    const data = out.split(',')[1];
+    return { type: 'image/jpeg', data, w: c.width, h: c.height, size: Math.round(data.length * 0.75) };
+  } finally { URL.revokeObjectURL(url); }
+}
+let packCache = null;
+function packGridHTML(list, manage) {
+  const org = LGD.league && LGD.league.createdBy === LGD.uid;
+  return list.length ? list.map(g => `<div class="gif-tile"><button class="gif-cell" data-a="${manage ? 'noop' : 'lg-lgif-pick'}" data-g="${esc(g.id)}" aria-label="GIF from ${esc(g.by || 'someone')}"><img data-lgif="${esc(g.id)}" alt=""></button>
+      ${manage ? `<div class="gif-meta"><span class="muted small">${esc(g.by || '')}</span>${g.uid === LGD.uid || org ? `<button class="link inline" data-a="lg-lgif-del" data-g="${esc(g.id)}">Delete</button>` : ''}</div>` : ''}</div>`).join('')
+    : `<p class="note">No league GIFs yet. Upload one to start your league’s pack.</p>`;
+}
+async function loadPack(manage) {
+  const grid = $('#gif-grid'); if (!grid) return;
+  grid.innerHTML = '<p class="note">Loading…</p>';
+  try { const be = await lgBackend(); packCache = await be.listGifs(S.league.code); if (!$('#gif-grid')) return; grid.innerHTML = packGridHTML(packCache, manage); hydrateGifs(grid); }
+  catch (e) { grid.innerHTML = '<p class="note">Couldn’t load the league’s GIFs. Check your connection and try again.</p>'; }
+}
+function openPack() {
+  openSheet(`<div class="sheet-head"><span></span><h2>League GIFs</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><p class="muted small">Everyone in ${esc(S.league.name)} can react with these. You can delete your own uploads${LGD.league && LGD.league.createdBy === LGD.uid ? ', and anyone’s as the organizer' : ''}.</p>
+    <div class="stack-btns"><button class="btn" data-a="lg-lgif-upload">Upload a GIF</button></div>
+    <p class="err" id="gif-err" role="alert"></p>
+    <div class="gif-grid manage" id="gif-grid"></div></div>`);
+  loadPack(true);
+}
+let uploadThen = '';
+async function uploadGif(file) {
+  const err = $('#gif-err'); if (err) err.textContent = 'Uploading…';
+  try {
+    const g = await prepGif(file), be = await lgBackend();
+    const id = await be.addGif(S.league.code, { by: S.league.player, w: g.w, h: g.h, size: g.size }, g.type, g.data);
+    lgifCache.set(id, `data:${g.type};base64,${g.data}`);
+    if (err) err.textContent = '';
+    if (uploadThen === 'pick' && gifFor) { const r = LGD.results.find(x => x.id === gifFor); if (r) { const v = 'lgif:' + id, code = S.league.code; r.reactions = { ...(r.reactions || {}), [LGD.uid]: v }; openResult(r.id); lgWrite(be2 => be2.react(code, r.id, v)); toast('GIF added to the league and sent.'); return; } }
+    toast('GIF added to the league.'); if ($('#gif-grid')) loadPack(uploadThen !== 'pick');
+  } catch (e) { const el = $('#gif-err'); if (el) el.textContent = e && e.message && !/permission|network|offline|unavailable/i.test(e.message) ? e.message : 'Couldn’t upload it. Check your connection and try again.'; }
+}
+Object.assign(A, {
+  'lg-pack': () => openPack(),
+  'lg-gif-tab': t => { gifTab = t.dataset.v; document.querySelectorAll('[data-a="lg-gif-tab"]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); $('#gif-q').hidden = gifTab !== 'giphy'; $('.giphy-mark').hidden = gifTab !== 'giphy'; $('#gif-up').hidden = gifTab !== 'league'; if (gifTab === 'league') loadPack(false); else loadGifs(($('#gif-q').value || '').trim()); },
+  'lg-lgif-pick': t => {
+    const r = LGD.results.find(x => x.id === gifFor); if (!r) return closeSheet();
+    const v = 'lgif:' + t.dataset.g, code = S.league.code;
+    r.reactions = { ...(r.reactions || {}), [LGD.uid]: v }; openResult(r.id); lgWrite(be => be.react(code, r.id, v));
+  },
+  'lg-lgif-upload': t => { uploadThen = t.dataset.then || ''; const fi = $('#gif-file'); fi.value = ''; fi.click(); },
+  'lg-lgif-del': async t => {
+    const id = t.dataset.g;
+    try { const be = await lgBackend(); await be.deleteGif(S.league.code, id); lgifCache.set(id, ''); toast('GIF deleted.'); loadPack(true); }
+    catch (e) { toast('Couldn’t delete it. Check your connection and try again.'); }
+  },
+  noop: () => {},
+});
+$('#gif-file').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) uploadGif(f); });
+
 /* ---------------- GIF reactions (GIPHY) ---------------- */
-let gifFor = '', gifT = null, gifSeq = 0;
+let gifFor = '', gifT = null, gifSeq = 0, gifTab = 'giphy';
 function openGifPicker(id) {
   gifFor = id;
+  const hasGiphy = !!giphyKey(); if (!hasGiphy) gifTab = 'league';
   openSheet(`<div class="sheet-head"><button class="link" data-a="lg-gif-back">Back</button><h2>Pick a GIF</h2><span></span></div>
-  <div class="sheet-body"><input type="search" id="gif-q" placeholder="Search GIFs" aria-label="Search GIFs" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+  <div class="sheet-body">${hasGiphy ? `<div class="seg two-up" role="group" aria-label="GIF source">${[['giphy', 'GIPHY'], ['league', 'This league']].map(([v, l]) => `<button data-a="lg-gif-tab" data-v="${v}" aria-pressed="${gifTab === v}">${l}</button>`).join('')}</div>` : ''}
+    <input type="search" id="gif-q" placeholder="Search GIFs" aria-label="Search GIFs" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search"${gifTab === 'giphy' ? '' : ' hidden'}>
+    <div id="gif-up"${gifTab === 'league' ? '' : ' hidden'}><div class="stack-btns" style="margin-top:0"><button class="btn" data-a="lg-lgif-upload" data-then="pick">Upload a GIF</button></div><p class="err" id="gif-err" role="alert"></p></div>
     <div class="gif-grid" id="gif-grid" aria-live="polite"><p class="note">Loading…</p></div>
-    <p class="giphy-mark">Powered by GIPHY</p></div>`, { backdropCloses: false });
-  loadGifs('');
+    <p class="giphy-mark"${gifTab === 'giphy' ? '' : ' hidden'}>Powered by GIPHY</p></div>`, { backdropCloses: false });
+  if (gifTab === 'giphy') loadGifs(''); else loadPack(false);
 }
 async function loadGifs(q) {
+  if (gifTab !== 'giphy') return;
   const mySeq = ++gifSeq, grid = $('#gif-grid'); if (!grid) return;
   const k = encodeURIComponent(giphyKey());
   const url = q ? `https://api.giphy.com/v1/gifs/search?api_key=${k}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13&lang=en`
@@ -2460,7 +2595,7 @@ async function loadGifs(q) {
     if (res.status === 429) throw new Error('limit');
     if (!res.ok) throw new Error('bad');
     const data = (await res.json()).data || [];
-    if (mySeq !== gifSeq || !$('#gif-grid')) return;
+    if (mySeq !== gifSeq || !$('#gif-grid') || gifTab !== 'giphy') return;
     const items = data.map(d => ({ id: d.id, src: d.images && (d.images.fixed_width_small || d.images.fixed_width || {}).url, t: d.title || 'GIF' })).filter(d => GIF_RE.test('gif:' + d.id) && d.src);
     grid.innerHTML = items.length ? items.map(d => `<button class="gif-cell" data-a="lg-gif-pick" data-g="${esc(d.id)}" aria-label="${esc(d.t)}"><img src="${esc(d.src)}" alt="" loading="lazy"></button>`).join('')
       : `<p class="note">No GIFs found. Try another search.</p>`;
