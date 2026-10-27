@@ -748,7 +748,12 @@ function saveSession() {
   const lgSel = $('#f-league'), toLg = !editing && lgSel && lgSel.value ? S.leagues.find(l => l.code === lgSel.value) : null;
   if (toLg && !toLg.type) toLg.type = type;   // remember which game this league is for
   save(); closeSheet(); render(); toast(msg);
-  if (toLg) postLeagueResult(v.date, v.buyIn, v.stack, toLg).then(() => toast(`${msg} Added to ${toLg.name}.`)).catch(() => toast('Saved on your phone, but couldn’t add it to the league. Add it from the League tab.'));
+  if (toLg) {
+    const dup = S.league && toLg.code === S.league.code && LGD.results.some(r => r.uid === LGD.uid && r.date === v.date);
+    if (v.buyIn > MAX_C || v.stack > MAX_C) toast('Saved on your phone. Amounts over $100,000 can’t be added to a league.');
+    else if (dup) toast(`${msg} You already have a result for that night in ${toLg.name}, so it wasn’t added again. Add it from the League tab if it was a second game.`);
+    else lgWrite(be => be.addResult(toLg.code, { date: v.date, buyIn: v.buyIn, cashOut: v.stack, player: toLg.player }), `${msg} Added to ${toLg.name}.`);
+  }
   if (wasLive) { window.scrollTo(0, 0); syncWakeLock(); }
   return true;
 }
@@ -2018,13 +2023,16 @@ async function fbBackend() {
     async addResult(code, r) { await F.addDoc(F.collection(db, 'leagues', code, 'results'), { ...r, uid: user.uid, reactions: {}, createdAt: F.serverTimestamp() }); },
     async updateResult(code, id, r) { await F.updateDoc(F.doc(db, 'leagues', code, 'results', id), r); },
     async deleteResult(code, id) { await F.deleteDoc(F.doc(db, 'leagues', code, 'results', id)); },
+    async renamePlayer(code, ids, name) {
+      for (let i = 0; i < ids.length; i += 10) { const b = F.writeBatch(db); ids.slice(i, i + 10).forEach(id => b.update(F.doc(db, 'leagues', code, 'results', id), { player: name })); await b.commit(); }
+    },
     async deleteResults(code, ids) {
-      for (let i = 0; i < ids.length; i += 400) { const b = F.writeBatch(db); ids.slice(i, i + 400).forEach(id => b.delete(F.doc(db, 'leagues', code, 'results', id))); await b.commit(); }
+      for (let i = 0; i < ids.length; i += 10) { const b = F.writeBatch(db); ids.slice(i, i + 10).forEach(id => b.delete(F.doc(db, 'leagues', code, 'results', id))); await b.commit(); }
     },
     // Organizer only: results first, then members, then the league itself (the rules check the league to confirm the organizer).
     async deleteLeague(code, resultIds, memberIds) {
       await this.deleteResults(code, resultIds);
-      for (let i = 0; i < memberIds.length; i += 400) { const b = F.writeBatch(db); memberIds.slice(i, i + 400).forEach(id => b.delete(F.doc(db, 'leagues', code, 'members', id))); await b.commit(); }
+      for (let i = 0; i < memberIds.length; i += 10) { const b = F.writeBatch(db); memberIds.slice(i, i + 10).forEach(id => b.delete(F.doc(db, 'leagues', code, 'members', id))); await b.commit(); }
       await F.deleteDoc(L(code));
     },
     async react(code, id, emoji) { await F.updateDoc(F.doc(db, 'leagues', code, 'results', id), { [`reactions.${user.uid}`]: emoji || F.deleteField() }); },
@@ -2051,7 +2059,7 @@ function lgStart() {
       LGD[kind] = val; LGD.ready = true; LGD.error = '';
       if (kind === 'league' && val && val.name !== S.league.name) { S.league.name = val.name; save(); }
       if (tab === 'league' && $('#backdrop').hidden) renderLeague();
-    }, () => { LGD.error = 'Couldn’t reach the league. Check your connection.'; if (tab === 'league') renderLeague(); }));
+    }, err => { if (err && err.code === 'permission-denied') LGD.rejoin = true; else LGD.error = 'Couldn’t reach the league. Check your connection.'; if (tab === 'league') renderLeague(); }));
   }).catch(() => { LGD.error = 'Couldn’t connect to the league. Check your connection and try again.'; if (tab === 'league') renderLeague(); });
 }
 const lgNet = r => r.cashOut - r.buyIn;
@@ -2083,8 +2091,11 @@ function leagueHTML() {
   let h = `<div class="lg-head"><button class="lg-title lg-switcher" data-a="lg-switch-open" aria-label="Switch league"><div class="live-type">${esc(lg.name)} <span class="chev" aria-hidden="true"></span></div><div class="muted small">Playing as ${esc(lg.player)}, code <b class="code">${esc(lg.code)}</b></div></button>
     <button class="btn" data-a="lg-share">Invite</button></div>`;
   if (LGD.ready && !LGD.league) return h + `<p class="warn">This league was deleted by its organizer, so its results are gone.</p><div class="stack-btns"><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
+  if (LGD.rejoin && !(LGD.ready && LGD.league)) return h + `<p class="warn">This phone isn’t signed in to ${esc(lg.name)} yet. That happens after restoring a backup or re-adding the app to your home screen.</p><div class="stack-btns"><button class="btn primary" data-a="lg-rejoin">Rejoin as ${esc(lg.player)}</button><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
   if (LGD.error) h += `<p class="warn">${esc(LGD.error)}</p>`;
   if (!LGD.ready && !LGD.error) return h + `<p class="note">Loading the league…</p>`;
+  const twin = LGD.members.find(m => m.id !== LGD.uid && key(m.name) === key(lg.player));
+  if (twin) h += `<p class="warn">Another phone in this league also uses the name ${esc(lg.player)}. If that’s your old phone, you’re all set. If it’s someone else, change your name under League options so your results aren’t combined.</p>`;
   h += `<button class="btn primary wide" data-a="lg-add">Add my result</button>
     <div class="seg two-up" role="group" aria-label="Show" style="margin-top:14px">${[['standings', 'Standings'], ['nights', 'Game nights']].map(([v, l]) => `<button data-a="lg-view" data-v="${v}" aria-pressed="${lgView === v}">${l}</button>`).join('')}</div>`;
   if (!LGD.results.length) return h + `<p class="note">No results yet. After your next game, tap Add my result, and ask everyone else to add theirs.</p>` + lgFoot();
@@ -2110,7 +2121,9 @@ const lgFoot = () => {
   const lg = S.league, types = typesAlpha();
   return `<section class="an"><h2>League options</h2>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
-    <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p></section>
+    <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
+    <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="text" id="lg-rename" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
+    <p class="muted small">Changing it also updates the name on your past results.</p></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
 };
@@ -2124,7 +2137,7 @@ const lastPlayer = () => (S.league && S.league.player) || S.settings.playerName 
 function openJoin(step = 'code', code = '', note = '') {
   if (step === 'code') {
     openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Join a league</h2><button class="link strong" data-a="lg-join-check">Next</button></div>
-    <div class="sheet-body"><label class="field"><span>League code</span><input type="text" id="lg-code" value="${esc(code)}" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="6" placeholder="ABC123" enterkeyhint="next" class="code-in"></label>
+    <div class="sheet-body"><label class="field"><span>League code</span><input type="text" id="lg-code" value="${esc(code)}" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="12" placeholder="ABC123" enterkeyhint="next" class="code-in"></label>
     <p class="muted small">Ask whoever started the league for its 6-character code.</p><p class="err" id="lg-err" role="alert">${esc(note)}</p></div>`, { backdropCloses: false });
   } else {
     openSheet(`<div class="sheet-head"><button class="link" data-a="lg-join-open">Back</button><h2>${esc(pendingLeague.name)}</h2><button class="link strong" data-a="lg-join-do">Join</button></div>
@@ -2191,6 +2204,12 @@ function pickLeagueFor(type) {
   sel.value = hit ? hit.code : '';
 }
 const lgFail = m => { const e = $('#lg-err'); if (e) e.textContent = m; };
+const MAX_C = 10000000;   // $100,000, the same limit the security rules use
+function lgWrite(fn, okMsg) {
+  if (okMsg) toast(navigator.onLine === false ? `${okMsg} It’ll sync when you’re back online.` : okMsg);
+  return lgBackend().then(fn).catch(e => toast(e && e.code === 'permission-denied' ? 'The league didn’t accept that change. Try rejoining the league.' : 'Couldn’t reach the league. Check your connection and try again.'));
+}
+let lgDupOk = '';
 Object.assign(A, {
   'lg-view': t => { lgView = t.dataset.v; renderLeague(); },
   'lg-switch-open': () => openSwitcher(),
@@ -2246,26 +2265,33 @@ Object.assign(A, {
     if (!isISO(date)) return lgFail('Enter the date of the game night.');
     if (buyIn == null) return lgFail('Enter your total buy-in, including rebuys.');
     if (cashOut == null) return lgFail('Enter how much you cashed out. Enter 0 if you lost it all.');
-    try {
-      const be = await lgBackend();
-      if (lgEditing) await be.updateResult(S.league.code, lgEditing, { date, buyIn, cashOut, player: S.league.player });
-      else await postLeagueResult(date, buyIn, cashOut);
-      closeSheet(); toast(lgEditing ? 'Result updated.' : `Added to ${S.league.name}.`); lgEditing = null; renderLeague();
-    } catch (e) { lgFail('Couldn’t save to the league. Check your connection and try again.'); }
+    if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
+    if (!lgEditing && lgDupOk !== date && LGD.results.some(r => r.uid === LGD.uid && r.date === date)) { lgDupOk = date; return lgFail(`You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    const code = S.league.code, editing = lgEditing, rec = { date, buyIn, cashOut, player: S.league.player };
+    lgEditing = null; lgDupOk = ''; closeSheet();
+    lgWrite(be => editing ? be.updateResult(code, editing, rec) : be.addResult(code, rec), editing ? 'Result updated.' : `Added to ${S.league.name}.`);
   },
   'lg-result': t => openResult(t.dataset.id),
   'lg-player': t => openPlayer(t.dataset.name),
   'lg-edit': t => openResultForm(LGD.results.find(x => x.id === t.dataset.id)),
-  'lg-del': async t => {
-    try { const be = await lgBackend(); await be.deleteResult(S.league.code, t.dataset.id); closeSheet(); toast('Result deleted.'); renderLeague(); }
-    catch (e) { toast('Couldn’t delete it. Check your connection.'); }
+  'lg-del': t => { const code = S.league.code, id = t.dataset.id; closeSheet(); lgWrite(be => be.deleteResult(code, id), 'Result deleted.'); },
+  'lg-rejoin': async () => {
+    try { const be = await lgBackend(); await be.setMember(S.league.code, S.league.player); LGD.rejoin = false; lgStart(); renderLeague(); toast(`You’re back in ${S.league.name}.`); }
+    catch (e) { toast('Couldn’t rejoin right now. Check your connection and try again.'); }
+  },
+  'lg-rename': () => {
+    const name = $('#lg-rename').value.trim().replace(/\s+/g, ' ');
+    if (!name || name === S.league.player) return;
+    const code = S.league.code, ids = LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id);
+    S.league.player = name; S.settings.playerName = name; save(); renderLeague();
+    lgWrite(async be => { await be.setMember(code, name); await be.renamePlayer(code, ids, name); }, `You’re now ${name} in this league.`);
   },
   'lg-react': async t => {
     const r = LGD.results.find(x => x.id === t.dataset.id); if (!r) return;
     const cur = (r.reactions || {})[LGD.uid], next = cur === t.dataset.v ? null : t.dataset.v;
     r.reactions = { ...(r.reactions || {}) }; if (next) r.reactions[LGD.uid] = next; else delete r.reactions[LGD.uid];
     openResult(r.id);
-    try { const be = await lgBackend(); await be.react(S.league.code, r.id, next); } catch (e) { toast('Couldn’t send your reaction. Check your connection.'); }
+    const code = S.league.code; lgWrite(be => be.react(code, r.id, next));
   },
   'lg-leave': () => {
     const mine = LGD.results.filter(r => r.uid === LGD.uid).length;
