@@ -370,6 +370,8 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 #gif-q { margin-top: 2px; }
 .giphy-mark { text-align: center; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink2); margin: 12px 0 0; }
 .lg-switch { margin: 4px 0 12px; }
+.also-sess { margin: 4px 0 12px; align-items: flex-start; }
+.also-sess input { margin-top: 2px; }
 .nw { white-space: nowrap; }
 .pl { stroke-width: 2; }
 .pl.faded { stroke-opacity: .18; }
@@ -479,7 +481,7 @@ const f1 = v => Math.round(v * 10) / 10;
 
 /* ---------------- data ---------------- */
 let storageOK = true;
-const defaultSettings = () => ({ cb: false, playerName: '', toLeague: true, theme: 'system', window: 10, keepAwake: true, anView: 'results', players: 9, filters: { type: '', start: '', end: '' } });
+const defaultSettings = () => ({ cb: false, playerName: '', toLeague: true, alsoSession: false, theme: 'system', window: 10, keepAwake: true, anView: 'results', players: 9, filters: { type: '', start: '', end: '' } });
 const S = { sessions: [], seq: 0, live: null, leagues: [], leagueCur: '', leftLeagues: [], backupAt: 0, backupSnooze: 0, settings: defaultSettings() };
 let lgOpen = false;   // League tab: false shows your list of leagues, true shows the current league's page
 // S.league is the league currently shown. Setting it adds or switches to that league; setting null leaves the current one.
@@ -551,6 +553,7 @@ function ingest(d) {
       if (typeof st.cb === 'boolean') S.settings.cb = st.cb;
       if (typeof st.playerName === 'string') S.settings.playerName = st.playerName.slice(0, 24);
       if (typeof st.toLeague === 'boolean') S.settings.toLeague = st.toLeague;
+      if (typeof st.alsoSession === 'boolean') S.settings.alsoSession = st.alsoSession;
       const w = parseInt(st.window, 10); if (w >= 1 && w <= 500) S.settings.window = w;
       if (typeof st.keepAwake === 'boolean') S.settings.keepAwake = st.keepAwake;
       if (st.anView === 'preflop') S.settings.anView = 'preflop';
@@ -2281,7 +2284,11 @@ function openResultForm(r) {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" value="${v.buyIn}" placeholder="0.00"></div></label>
       <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" value="${v.out}" placeholder="0.00"></div></label>
     </div>
-    <p class="calc" id="lg-calc" aria-live="polite"></p><p class="err" id="lg-err" role="alert"></p>
+    <p class="calc" id="lg-calc" aria-live="polite"></p>
+    ${r ? '' : `<label class="switch also-sess"><input type="checkbox" id="lg-also"${S.settings.alsoSession ? ' checked' : ''}><span><b>Also save as a session</b><br><span class="muted small">Adds it to your own sessions and stats too.</span></span></label>
+    <div id="lg-also-box"${S.settings.alsoSession ? '' : ' hidden'}><label class="field"><span>Session type</span><input type="search" id="lg-also-type" value="${esc(S.league.type || S.league.name)}" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" enterkeyhint="done"></label>
+      <p class="muted small" id="lg-also-note"></p></div>`}
+    <p class="err" id="lg-err" role="alert"></p>
     ${r ? `<div class="stack-btns"><button type="button" class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Delete result</button></div>` : ''}
   </form></div>`, { backdropCloses: false });
   lgCalc();
@@ -2289,6 +2296,12 @@ function openResultForm(r) {
 function lgCalc() {
   const a = parseMoney($('#lg-in') && $('#lg-in').value), b = parseMoney($('#lg-out') && $('#lg-out').value), el = $('#lg-calc');
   if (el) el.innerHTML = a != null && b != null ? `Net result ${moneyHTML((b - a) / 100)}.` : '';
+  // warn before saving a second session for the same night
+  const note = $('#lg-also-note'), on = $('#lg-also') && $('#lg-also').checked;
+  if (note) {
+    const d = $('#lg-date').value, t = ($('#lg-also-type').value || '').trim(), same = on && isISO(d) && t ? sameDay(d, t) : null;
+    note.textContent = same ? `You already have a ${same.type} session on ${fmtDate(d)}. Saving adds another one, so turn this off if you already logged it.` : '';
+  }
 }
 function openResult(id) {
   const r = LGD.results.find(x => x.id === id); if (!r) return;
@@ -2378,7 +2391,7 @@ Object.assign(A, {
     else messageSheet('Invite your friends', esc(text));
   },
   'lg-add': () => openResultForm(null),
-  'lg-use-last': t => { $('#lg-date').value = t.dataset.date; $('#lg-in').value = (t.dataset.in / 100).toFixed(2); $('#lg-out').value = (t.dataset.out / 100).toFixed(2); lgCalc(); },
+  'lg-use-last': t => { if ($('#lg-also')) { $('#lg-also').checked = false; $('#lg-also-box').hidden = true; } $('#lg-date').value = t.dataset.date; $('#lg-in').value = (t.dataset.in / 100).toFixed(2); $('#lg-out').value = (t.dataset.out / 100).toFixed(2); lgCalc(); },
   'lg-save': async () => {
     const date = $('#lg-date').value, buyIn = parseMoney($('#lg-in').value), cashOut = parseMoney($('#lg-out').value);
     if (!isISO(date)) return lgFail('Enter the date of the game night.');
@@ -2386,9 +2399,22 @@ Object.assign(A, {
     if (cashOut == null) return lgFail('Enter how much you cashed out. Enter 0 if you lost it all.');
     if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
     if (!lgEditing && lgDupOk !== date && LGD.results.some(r => r.uid === LGD.uid && r.date === date)) { lgDupOk = date; return lgFail(`You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    const also = !lgEditing && $('#lg-also') && $('#lg-also').checked;
+    let stype = '';
+    if (also) {
+      stype = ($('#lg-also-type').value || '').trim().replace(/\s+/g, ' ');
+      if (!stype) return lgFail('Enter a session type for your own sessions.');
+      const known = typeInfo().get(key(stype)); if (known) stype = known.name;
+    }
+    if (!lgEditing) S.settings.alsoSession = !!also;
     const code = S.league.code, editing = lgEditing, rec = { date, buyIn, cashOut, player: S.league.player };
+    if (also) {
+      S.sessions.push({ id: uid(), seq: ++S.seq, date, type: stype, buyIn, stack: cashOut });
+      if (!S.league.type) S.league.type = stype;   // link the league to this session type
+    }
+    save();
     lgEditing = null; lgDupOk = ''; closeSheet();
-    lgWrite(be => editing ? be.updateResult(code, editing, rec) : be.addResult(code, rec), editing ? 'Result updated.' : `Added to ${S.league.name}.`);
+    lgWrite(be => editing ? be.updateResult(code, editing, rec) : be.addResult(code, rec), editing ? 'Result updated.' : also ? `Added to ${S.league.name} and saved as a session.` : `Added to ${S.league.name}.`);
   },
   'lg-result': t => openResult(t.dataset.id),
   'lg-player': t => openPlayer(t.dataset.name),
@@ -2478,6 +2504,7 @@ Object.assign(A, {
   'add-done': () => openSessionForm(),
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
+document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#lg-also-box').hidden = !e.target.checked; lgCalc(); } else if (e.target.id === 'lg-date' && $('#lgf')) lgCalc(); });
 
 /* ---------------- league GIF pack ---------------- */
 const LGIF_TYPES = ['image/gif', 'image/webp', 'image/png', 'image/jpeg'], LGIF_MAX = 500 * 1024;
