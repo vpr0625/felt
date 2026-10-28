@@ -883,7 +883,7 @@ function openSettings() {
     <button class="btn wide" data-a="backup-page">Back up or restore</button>
     <h3>Sample data</h3>
     ${S.sessions.some(s => s.sample) ? `<p class="muted small">${S.sessions.filter(s => s.sample).length} made-up sessions are loaded. Removing them doesn’t touch your own sessions.</p>
-    <button class="btn wide" data-a="sample-del">Remove sample sessions</button>` : `<p class="muted small">Adds six months of made-up sessions, with recorded hands for the last ten and a sample bankroll, so you can see how the charts and stats look. You can remove them anytime without touching your own sessions.</p>
+    <button class="btn wide" data-a="sample-del">Remove sample sessions</button>` : `<p class="muted small">${brReal() ? 'Adds six months of made-up sessions, with recorded hands for the last ten, so you can see how the charts and stats look. Your own bankroll is kept, so no sample bankroll is added.' : 'Adds six months of made-up sessions, with recorded hands for the last ten and a sample bankroll, so you can see how the charts and stats look.'} You can remove them anytime without touching your own sessions.</p>
     <button class="btn wide" data-a="sample-add">Add sample sessions</button>`}
     <h3>Your sessions</h3>
     <p class="muted small">${n === 0 ? 'No sessions are saved yet.' : `${n} session${n === 1 ? ' is' : 's are'} saved on this device${nh ? `, with ${nh.toLocaleString('en-US')} recorded hands` : ''}.`} Sessions and hands export as separate CSV files you can open in Excel, Numbers or Google Sheets. Import sessions before hands.</p>
@@ -895,7 +895,7 @@ function openSettings() {
     </div>
     <button class="btn wide" data-a="copy-csv"${n ? '' : ' disabled'}>Copy sessions as text</button>
     <p class="muted small">Sessions are stored only on this device and never uploaded. Export a copy every so often as a backup.</p>
-    <button class="btn danger wide" data-a="erase"${n ? '' : ' disabled'}>Erase all sessions</button>
+    <button class="btn danger wide" data-a="erase"${n || brReal() ? '' : ' disabled'}>${n || !brReal() ? 'Erase all sessions' : 'Erase bankroll'}</button>
   </div>`);
 }
 function applyTheme() {
@@ -1411,10 +1411,17 @@ const A = {
   'do-paste': () => { const v = $('#paste-box').value; if (!v.trim()) { $('#paste-box').focus(); return; } handleImportText(v, 'the pasted text'); },
   'import-merge': () => { if (!pendingImport) return; const snap = snapshot(), n = pendingImport.fresh.length; addItems(pendingImport.fresh); pendingImport = null; save(); closeSheet(); render(); toast(`Added ${n} session${n === 1 ? '' : 's'}.`, () => restore(snap)); },
   'import-replace': () => { if (!pendingImport) return; const snap = snapshot(), n = pendingImport.items.length; S.sessions = []; S.seq = 0; addItems(pendingImport.items); pendingImport = null; save(); closeSheet(); render(); toast(`Replaced with ${n} session${n === 1 ? '' : 's'}.`, () => restore(snap)); },
-  erase: () => openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Erase all sessions</h2><span></span></div>
-    <div class="sheet-body"><p>This removes all ${S.sessions.length} sessions and their recorded hands from this device. Export them first if you want a copy.</p>
-    <div class="stack-btns"><button class="btn danger" data-a="erase-confirm">Erase ${S.sessions.length} sessions</button><button class="btn" data-a="close">Keep my sessions</button></div></div>`),
-  'erase-confirm': () => { const snap = snapshot(); S.sessions = []; S.seq = 0; save(); closeSheet(); render(); toast('Erased all sessions.', () => restore(snap)); },
+  erase: () => openErase(S.sessions.length ? 'all' : 'bankroll'),
+  'erase-confirm': () => {
+    const mode = $('[data-a="erase-confirm"]').dataset.m, wipeBr = mode === 'bankroll' || !!($('#erase-br') && $('#erase-br').checked);
+    const snap = snapshot(), brSnap = JSON.stringify(S.bankroll), n = S.sessions.length;
+    if (mode === 'all') { S.sessions = []; S.seq = 0; }
+    // a sample bankroll goes with the sessions; your own only when you choose to erase it
+    if (wipeBr || (mode === 'all' && S.bankroll.sample)) S.bankroll = { on: false, start: 0, date: '', tx: [] };
+    save(); closeSheet(); render();
+    toast(mode === 'bankroll' ? 'Erased your bankroll.' : wipeBr ? `Erased ${n} session${n === 1 ? '' : 's'} and your bankroll.` : 'Erased all sessions.', () => { S.bankroll = JSON.parse(brSnap); restore(snap); });
+  },
+  'br-erase': () => openErase('bankroll'),
   'clear-filters': () => { S.settings.filters = { type: '', start: '', end: '' }; save(); render(); },
   jump: t => { const el = document.getElementById(t.dataset.to); if (el) el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
   undo: () => { const fn = undoFn; undoFn = null; $('#toast').hidden = true; if (fn) { fn(); toast('Undone.'); } },
@@ -2000,6 +2007,22 @@ $('#backup-in').addEventListener('change', async e => {
   if (!d) { messageSheet('Couldn’t restore', 'That file isn’t a backup from this app.'); return; }
   confirmRestore(d);
 });
+
+// A bankroll you set up yourself (not the sample one), with or without tracking turned on.
+const brReal = () => !!(S.bankroll.date && !S.bankroll.sample);
+function openErase(mode) {
+  const n = S.sessions.length, tx = S.bankroll.tx.length, br = brReal();
+  const nd = S.bankroll.tx.filter(x => x.kind === 'd').length, nw = tx - nd, pl = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  const parts = ['your starting bankroll', nd ? pl(nd, 'deposit') : '', nw ? pl(nw, 'withdrawal') : ''].filter(Boolean);
+  const brWhat = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>${mode === 'bankroll' ? 'Erase bankroll' : 'Erase all sessions'}</h2><span></span></div>
+    <div class="sheet-body">${mode === 'bankroll'
+      ? `<p>This removes ${brWhat} from this device. Your sessions aren’t affected.</p>`
+      : `<p>${n === 1 ? 'This removes your 1 session and its recorded hands' : `This removes all ${n} sessions and their recorded hands`} from this device. Export ${n === 1 ? 'it' : 'them'} first if you want a copy.</p>
+        ${br ? `<label class="switch"><input type="checkbox" id="erase-br"><span><b>Also erase my bankroll</b><br><span class="muted small">Removes ${brWhat}.</span></span></label>` : ''}`}
+    <div class="stack-btns"><button class="btn danger" data-a="erase-confirm" data-m="${mode}">${mode === 'bankroll' ? 'Erase bankroll' : `Erase ${n} session${n === 1 ? '' : 's'}`}</button><button class="btn" data-a="close">${mode === 'bankroll' ? 'Keep my bankroll' : 'Keep my sessions'}</button></div></div>`);
+}
+document.addEventListener('change', e => { if (e.target.id === 'erase-br') { const b = $('[data-a="erase-confirm"]'), n = S.sessions.length; b.textContent = `Erase ${n} session${n === 1 ? '' : 's'}${e.target.checked ? ' and bankroll' : ''}`; } });
 
 /* ---------------- sample data ---------------- */
 // Made-up sessions and hands for trying the app out. They're marked so they can be removed without touching real sessions.
@@ -3288,7 +3311,7 @@ function openBrSetup(first) {
     <label class="field"><span>As of</span><input type="date" id="br-date" value="${b.date || todayISO()}"></label></div>
     <p class="muted small">Sessions on or after this date count toward your bankroll. Earlier sessions are left out, since they’re already part of your starting amount.</p>
     <p class="err" id="br-err" role="alert"></p>
-    ${first ? '' : '<div class="stack-btns"><button type="button" class="btn danger" data-a="br-off">Turn off bankroll tracking</button></div>'}
+    ${first ? '' : `<div class="stack-btns"><button type="button" class="btn" data-a="br-off">Turn off bankroll tracking</button>${brReal() ? '<button type="button" class="btn danger" data-a="br-erase">Erase bankroll</button>' : ''}</div>`}
   </form></div>`, { backdropCloses: false });
 }
 function openBrTx(kind, x) {
