@@ -373,6 +373,7 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 #gif-q { margin-top: 2px; }
 .giphy-mark { text-align: center; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink2); margin: 12px 0 0; }
 .lg-switch { margin: 4px 0 12px; }
+.code-sample { font-family: ui-monospace, Menlo, monospace; font-size: 14px; background: var(--field); border-radius: 8px; padding: 8px 10px; }
 .also-sess { margin: 4px 0 12px; align-items: flex-start; }
 .also-sess input { margin-top: 2px; }
 .nw { white-space: nowrap; }
@@ -474,6 +475,7 @@ figure.compact .readout { min-height: 2.6em; margin-top: 4px; font-size: 13px; }
 </nav>
 <div id="backdrop" class="backdrop" hidden><div id="sheet" class="sheet" role="dialog" aria-modal="true" tabindex="-1"></div></div>
 <div id="toast" class="toast" role="status" hidden></div>
+<input type="file" id="lg-imp-file" accept=".csv,text/csv,text/plain" hidden>
 <input type="file" id="gif-file" accept="image/gif,image/webp,image/png,image/jpeg" hidden>
 <input type="file" id="backup-in" accept=".json,application/json,text/plain" hidden>
 <input type="file" id="file-in" accept=".csv,text/csv,text/comma-separated-values,text/plain" hidden>
@@ -828,7 +830,7 @@ function saveSession() {
   if (toLg && !toLg.type) toLg.type = type;   // remember which game this league is for
   save(); closeSheet(); render(); toast(msg);
   if (toLg) {
-    const dup = S.league && toLg.code === S.league.code && LGD.results.some(r => r.uid === LGD.uid && r.date === v.date);
+    const dup = S.league && toLg.code === S.league.code && LGD.results.some(r => isMine(r) && r.date === v.date);
     if (v.buyIn > MAX_C || v.stack > MAX_C) toast('Saved on your phone. Amounts over $100,000 can’t be added to a league.');
     else if (dup) toast(`${msg} You already have a result for that night in ${toLg.name}, so it wasn’t added again. Add it from the League tab if it was a second game.`);
     else lgWrite(be => be.addResult(toLg.code, { date: v.date, buyIn: v.buyIn, cashOut: v.stack, player: toLg.player }), `${msg} Added to ${toLg.name}.`);
@@ -2115,8 +2117,16 @@ async function fbBackend() {
     uid: user.uid,
     async getLeague(code) { const d = await F.getDoc(L(code)); return d.exists() ? { code, ...d.data() } : null; },
     async createLeague(code, name) { await F.setDoc(L(code), { name, createdBy: user.uid, createdAt: F.serverTimestamp() }); },
-    async setMember(code, name) { await F.setDoc(F.doc(db, 'leagues', code, 'members', user.uid), { name, joinedAt: F.serverTimestamp() }); },
+    async setMember(code, name) { await F.setDoc(F.doc(db, 'leagues', code, 'members', user.uid), { name, joinedAt: F.serverTimestamp() }, { merge: true }); },
+    async setClaims(code, claims, uid) { await F.updateDoc(F.doc(db, 'leagues', code, 'members', uid || user.uid), { claims }); },
     async removeMember(code) { await F.deleteDoc(F.doc(db, 'leagues', code, 'members', user.uid)); },
+    async addResults(code, list, onProgress) {
+      for (let i = 0; i < list.length; i += 10) {
+        const b = F.writeBatch(db);
+        list.slice(i, i + 10).forEach(r => b.set(F.doc(F.collection(db, 'leagues', code, 'results')), { ...r, uid: user.uid, reactions: {}, createdAt: F.serverTimestamp() }));
+        await b.commit(); if (onProgress) onProgress(Math.min(list.length, i + 10));
+      }
+    },
     async addResult(code, r) { await F.addDoc(F.collection(db, 'leagues', code, 'results'), { ...r, uid: user.uid, reactions: {}, createdAt: F.serverTimestamp() }); },
     async updateResult(code, id, r) { await F.updateDoc(F.doc(db, 'leagues', code, 'results', id), r); },
     async deleteResult(code, id) { await F.deleteDoc(F.doc(db, 'leagues', code, 'results', id)); },
@@ -2178,18 +2188,43 @@ function lgStart() {
   lgBackend().then(be => {
     LGD.uid = be.uid;
     lgUnsubs.push(be.watch(S.league.code, (kind, val) => {
-      LGD[kind] = val; LGD.ready = true; LGD.error = '';
+      LGD[kind] = val; LGD.ready = true; LGD.error = ''; LGD['got_' + kind] = true;
+      if (lgClaimAsk && LGD.got_members && LGD.got_results && LGD.members.some(m => m.id === LGD.uid)) { lgClaimAsk = false; if (unclaimedNames().length && $('#backdrop').hidden && tab === 'league') setTimeout(() => openClaim(true), 0); }
       if (kind === 'league' && val && val.name !== S.league.name) { S.league.name = val.name; save(); }
       if (tab === 'league' && $('#backdrop').hidden) renderLeague();
     }, err => { if (err && err.code === 'permission-denied') LGD.rejoin = true; else LGD.error = 'Couldn’t reach the league. Check your connection.'; if (tab === 'league') renderLeague(); }));
   }).catch(() => { LGD.error = 'Couldn’t connect to the league. Check your connection and try again.'; if (tab === 'league') renderLeague(); });
 }
 const lgNet = r => r.cashOut - r.buyIn;
+const isMine = r => r.uid === LGD.uid && !r.imported;   // imported history isn't yours, even though you added it
+// Claims link an imported name (like "Jackson") to a member, so that history shows under the member's current name.
+function lgClaimMap() {
+  const m = new Map();
+  for (const mem of [...LGD.members].sort((a, b) => ((a.joinedAt && a.joinedAt.seconds) || 0) - ((b.joinedAt && b.joinedAt.seconds) || 0)))
+    for (const c of Array.isArray(mem.claims) ? mem.claims : []) if (typeof c === 'string' && !m.has(c)) m.set(c, mem);
+  return m;
+}
+let claimCache = null, claimSig = '';
+function claimer(r) {
+  if (!r.imported) return null;
+  const sig = LGD.members.map(m => m.id + ':' + m.name + ':' + (m.claims || []).join(',')).join('|');
+  if (sig !== claimSig) { claimSig = sig; claimCache = lgClaimMap(); }
+  return claimCache.get(key(r.player)) || null;
+}
+const pName = r => { const c = claimer(r); return c ? c.name : r.player; };
+const isMineOrClaimed = r => isMine(r) || (claimer(r) && claimer(r).id === LGD.uid);
+// Imported names nobody has claimed yet (and that aren't already a member's own name)
+function unclaimedNames() {
+  const taken = new Set([...lgClaimMap().keys(), ...LGD.members.map(m => key(m.name))]), out = new Map();
+  for (const r of LGD.results) if (r.imported) { const k = key(r.player); if (!taken.has(k)) { const e = out.get(k) || { k, name: r.player, n: 0 }; e.n++; out.set(k, e); } }
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+const myClaims = () => { const me = LGD.members.find(m => m.id === LGD.uid); return me && Array.isArray(me.claims) ? me.claims : []; };
 function lgStandings() {
   const m = new Map();
   for (const r of LGD.results) {
-    const k = key(r.player || '?'), e = m.get(k) || { name: r.player, n: 0, total: 0, best: -Infinity, wins: 0 };
-    e.name = r.player; e.n++; e.total += lgNet(r); e.best = Math.max(e.best, lgNet(r)); if (lgNet(r) > 0) e.wins++;
+    const nm = pName(r) || '?', k = key(nm), e = m.get(k) || { name: nm, n: 0, total: 0, best: -Infinity, wins: 0 };
+    e.name = nm; e.n++; e.total += lgNet(r); e.best = Math.max(e.best, lgNet(r)); if (lgNet(r) > 0) e.wins++;
     m.set(k, e);
   }
   return [...m.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
@@ -2261,7 +2296,7 @@ function leagueHTML() {
     for (const d of [...nights.keys()].sort().reverse()) {
       const list = nights.get(d).sort((a, b) => lgNet(b) - lgNet(a)), sum = list.reduce((a, r) => a + lgNet(r), 0);
       h += `<section class="night"><h2><span>${fmtDate(d)}</span><span class="muted small">${list.length} player${list.length === 1 ? '' : 's'}</span></h2>
-        <table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td><div class="ty">${esc(r.player)}${r.uid === LGD.uid ? ' <span class="tag">You</span>' : ''}</div><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table>
+        <table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td><div class="ty">${esc(pName(r))}${isMineOrClaimed(r) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table>
         ${list.length > 1 ? (sum === 0 ? `<p class="muted small zs">Everyone’s results add up to $0.00.</p>` : `<p class="small zs warn-text">Results add up to ${usdC(sum, true)}, not $0. Someone may have a typo, or not everyone has added their result yet.</p>`) : ''}</section>`;
     }
     h += `<p class="muted small">Tap a result to react to it.</p>`;
@@ -2275,7 +2310,9 @@ const lgFoot = () => {
     <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
     <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small">Changing it also updates the name on your past results.</p>
-    <div class="stack-btns"><button class="btn" data-a="lg-pack">League GIFs</button></div></section>
+    ${LGD.results.some(r => r.imported) ? `<div class="stack-btns"><button class="btn" data-a="lg-claims-open">Past results${myClaims().length ? ' (linked)' : ''}</button></div><p class="muted small" style="margin-top:6px">Link imported results under an old name to you.</p>` : ''}
+    <div class="stack-btns"><button class="btn" data-a="lg-pack">League GIFs</button>
+    ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn" data-a="lg-imp-open">Import past results</button>${LGD.results.some(r => r.imported && r.uid === LGD.uid) ? '<button class="btn danger" data-a="lg-imp-clear">Delete imported results</button>' : ''}` : ''}</div></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
 };
@@ -2312,6 +2349,7 @@ function openResultForm(r) {
   const v = r ? { date: r.date, buyIn: (r.buyIn / 100).toFixed(2), out: (r.cashOut / 100).toFixed(2) } : { date: todayISO(), buyIn: '', out: '' };
   openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>${r ? 'Edit result' : 'Add my result'}</h2><button class="link strong" data-a="lg-save">Save</button></div>
   <div class="sheet-body"><form id="lgf" novalidate>
+    ${r && r.imported ? `<label class="field"><span>Player</span><input type="search" id="lg-imp-player" value="${esc(r.player)}" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"></label>` : ''}
     ${!r && last ? `<button type="button" class="chip" data-a="lg-use-last" data-date="${last.date}" data-in="${last.buyIn}" data-out="${last.stack}" style="margin-bottom:14px">Use my last session: ${fmtDate(last.date, false)}, ${usdC(net(last), true)}</button>` : ''}
     <label class="field"><span>Game night</span><input type="date" id="lg-date" value="${v.date}"></label>
     <div class="two">
@@ -2339,24 +2377,32 @@ function lgCalc() {
 }
 function openResult(id) {
   const r = LGD.results.find(x => x.id === id); if (!r) return;
-  const mine = r.uid === LGD.uid, organizer = LGD.league && LGD.league.createdBy === LGD.uid;
+  const mine = isMine(r), organizer = LGD.league && LGD.league.createdBy === LGD.uid, importedByMe = r.imported && r.uid === LGD.uid;
   const entries = Object.entries(r.reactions || {}), mineV = (r.reactions || {})[LGD.uid];
   const who = entries.filter(([, e]) => REACTIONS.includes(e)).map(([u, e]) => `${e} ${esc(reactorName(u))}`);
   const gifs = entries.filter(([, e]) => isGifReact(e)).map(([u, e]) => ({ u, v: e }));
-  openSheet(`<div class="sheet-head"><span></span><h2>${esc(r.player)}</h2><button class="link strong" data-a="close">Done</button></div>
+  openSheet(`<div class="sheet-head"><span></span><h2>${esc(pName(r))}</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><div class="muted small">${fmtDate(r.date)}</div>
     <div class="live-stats det-stats"><div class="ls"><span class="ls-l">In</span><span class="ls-v">${usdC(r.buyIn)}</span></div><div class="ls"><span class="ls-l">Out</span><span class="ls-v">${usdC(r.cashOut)}</span></div><div class="ls"><span class="ls-l">Net</span><span class="ls-v ${signCls(lgNet(r) / 100)}">${usdC(lgNet(r), true)}</span></div></div>
     <p class="label">React</p>
     <div class="rx-pick with-gif" role="group" aria-label="React">${REACTIONS.map(e => `<button data-a="lg-react" data-id="${esc(r.id)}" data-v="${e}" aria-pressed="${mineV === e}">${e}</button>`).join('')}<button class="gif-btn" data-a="lg-gif-open" data-id="${esc(r.id)}" aria-pressed="${isGifReact(mineV)}">GIF</button></div>
     ${who.length ? `<p class="muted small rx-who">${who.join(', ')}</p>` : ''}
     ${gifs.length ? `<div class="gif-reacts">${gifs.map(x => `<figure class="gif-react${x.u === LGD.uid ? ' mine' : ''}">${gifImg(x.v, 'gif-full', 'GIF from ' + reactorName(x.u))}<figcaption>${esc(reactorName(x.u))}${x.u === LGD.uid ? ` <button class="link inline" data-a="lg-react" data-id="${esc(r.id)}" data-v="${esc(mineV)}">Remove</button>` : ''}</figcaption></figure>`).join('')}</div>` : ''}
-    ${mine ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit my result</button></div>` : organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You started this league, so you can remove results that were added by mistake.</p>` : ''}
+    ${mine ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit my result</button></div>`
+      : importedByMe ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit this result</button><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You imported this result, so you can edit or remove it.</p>`
+      : organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You started this league, so you can remove results that were added by mistake.</p>` : ''}
   </div>`);
 }
 function openPlayer(name) {
-  const list = LGD.results.filter(r => key(r.player) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
+  const list = LGD.results.filter(r => key(pName(r)) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(name)}</h2><button class="link strong" data-a="close">Done</button></div>
-  <div class="sheet-body"><table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td class="date">${fmtDate(r.date, false)}</td><td><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table></div>`);
+  <div class="sheet-body">${(() => {
+      const mem = LGD.members.find(m => key(m.name) === key(name)), cl = mem && Array.isArray(mem.claims) ? mem.claims : [];
+      if (!cl.length) return '';
+      const names = cl.map(c => (LGD.results.find(r => r.imported && key(r.player) === c) || { player: c }).player);
+      const org = LGD.league && LGD.league.createdBy === LGD.uid && mem.id !== LGD.uid;
+      return `<p class="muted small" style="margin-top:0">Includes imported results under ${names.map(n => `<b>${esc(n)}</b>`).join(', ')}.</p>${org ? `<div class="stack-btns" style="margin:0 0 14px">${cl.map((c, i) => `<button class="btn" data-a="lg-unclaim" data-uid="${esc(mem.id)}" data-k="${esc(c)}">Unlink ${esc(names[i])}</button>`).join('')}</div>` : ''}`;
+    })()}<table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td class="date">${fmtDate(r.date, false)}</td><td><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table></div>`);
 }
 async function postLeagueResult(date, buyIn, cashOut, lg = S.league) {
   const be = await lgBackend();
@@ -2399,7 +2445,7 @@ Object.assign(A, {
     try {
       const be = await lgBackend(); await be.setMember(pendingLeague.code, name);
       S.league = { code: pendingLeague.code, name: pendingLeague.name, player: name }; S.settings.playerName = name; save();
-      closeSheet(); lgStart(); renderLeague(); toast(`You joined ${pendingLeague.name}.`); pendingLeague = null;
+      lgClaimAsk = true; closeSheet(); lgStart(); renderLeague(); toast(`You joined ${pendingLeague.name}.`); pendingLeague = null;
     } catch (e) { lgFail('Couldn’t join right now. Check your connection and try again.'); }
   },
   'lg-create-do': async () => {
@@ -2432,7 +2478,7 @@ Object.assign(A, {
     if (buyIn == null) return lgFail('Enter your total buy-in, including rebuys.');
     if (cashOut == null) return lgFail('Enter how much you cashed out. Enter 0 if you lost it all.');
     if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
-    if (!lgEditing && lgDupOk !== date && LGD.results.some(r => r.uid === LGD.uid && r.date === date)) { lgDupOk = date; return lgFail(`You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    if (!lgEditing && lgDupOk !== date && LGD.results.some(r => isMine(r) && r.date === date)) { lgDupOk = date; return lgFail(`You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
     const also = !lgEditing && $('#lg-also') && $('#lg-also').checked;
     let stype = '';
     if (also) {
@@ -2441,7 +2487,9 @@ Object.assign(A, {
       const known = typeInfo().get(key(stype)); if (known) stype = known.name;
     }
     if (!lgEditing) S.settings.alsoSession = !!also;
-    const code = S.league.code, editing = lgEditing, rec = { date, buyIn, cashOut, player: S.league.player };
+    const impEl = $('#lg-imp-player'), impName = impEl ? impEl.value.trim().replace(/\s+/g, ' ') : '';
+    if (impEl && !impName) return lgFail('Enter the player’s name.');
+    const code = S.league.code, editing = lgEditing, rec = { date, buyIn, cashOut, player: impEl ? impName : S.league.player };
     if (also) {
       S.sessions.push({ id: uid(), seq: ++S.seq, date, type: stype, buyIn, stack: cashOut });
       if (!S.league.type) S.league.type = stype;   // link the league to this session type
@@ -2461,7 +2509,7 @@ Object.assign(A, {
   'lg-rename': () => {
     const name = $('#lg-who-edit').value.trim().replace(/\s+/g, ' ');
     if (!name || name === S.league.player) return;
-    const code = S.league.code, ids = LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id);
+    const code = S.league.code, ids = LGD.results.filter(isMine).map(r => r.id);
     S.league.player = name; S.settings.playerName = name; save(); renderLeague();
     lgWrite(async be => { await be.setMember(code, name); await be.renamePlayer(code, ids, name); }, `You’re now ${name} in this league.`);
   },
@@ -2473,7 +2521,7 @@ Object.assign(A, {
     const code = S.league.code; lgWrite(be => be.react(code, r.id, next));
   },
   'lg-leave': () => {
-    const mine = LGD.results.filter(r => r.uid === LGD.uid).length;
+    const mine = LGD.results.filter(isMine).length;
     openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Leave league</h2><span></span></div>
     <div class="sheet-body"><p>You’ll stop seeing ${esc(S.league.name)} on this phone. You can rejoin anytime with code <b>${esc(S.league.code)}</b>.</p>
     ${mine ? `<label class="switch"><input type="checkbox" id="lg-wipe"><span><b>Also delete my ${mine} result${mine === 1 ? '' : 's'}</b><br><span class="muted small">Your results disappear from the standings and game nights for everyone. Past nights may no longer add up to $0. This can’t be undone.</span></span></label>`
@@ -2485,7 +2533,7 @@ Object.assign(A, {
     const gone = S.league ? S.league.name : 'the league';
     try {
       const be = await lgBackend();
-      if (code && wipe) await be.deleteResults(code, LGD.results.filter(r => r.uid === LGD.uid).map(r => r.id));
+      if (code && wipe) await be.deleteResults(code, LGD.results.filter(isMine).map(r => r.id));
       if (code) await be.removeMember(code);
     } catch (e) { if (wipe) { toast('Couldn’t delete your results. Check your connection and try again.'); return; } }
     const left = S.league;
@@ -2539,6 +2587,124 @@ Object.assign(A, {
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
 document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#lg-also-box').hidden = !e.target.checked; lgCalc(); } else if (e.target.id === 'lg-date' && $('#lgf')) lgCalc(); });
+
+/* ---------------- claiming imported history ---------------- */
+let lgClaimAsk = false;   // ask "are you one of these players?" once the league loads after joining
+function openClaim(fromJoin) {
+  const list = unclaimedNames(), mine = myClaims();
+  const minesNames = mine.map(c => (LGD.results.find(r => r.imported && key(r.player) === c) || { player: c }).player);
+  openSheet(`<div class="sheet-head"><span></span><h2>${fromJoin ? 'Welcome to ' + esc(S.league.name) : 'Past results'}</h2><button class="link strong" data-a="close">${fromJoin ? 'Skip' : 'Done'}</button></div>
+  <div class="sheet-body">
+    ${mine.length ? `<p class="muted small" style="margin-top:0">Linked to you: ${minesNames.map((n, i) => `<b>${esc(n)}</b> <button class="link inline" data-a="lg-release" data-k="${esc(mine[i])}">Unlink</button>`).join(', ')}</p>` : ''}
+    ${list.length ? `<p style="margin-top:0"><b>Are you one of these players?</b></p><p class="muted small">This league has results from before it started. Tap your old name to count that history as yours. You’ll still go by ${esc(S.league.player)}.</p>
+      <div class="add-menu">${list.map(c => `<button class="add-opt" data-a="lg-claim" data-k="${esc(c.k)}"><b>${esc(c.name)}</b><span class="muted small">${c.n} night${c.n === 1 ? '' : 's'}</span></button>`).join('')}</div>
+      <div class="stack-btns"><button class="btn" data-a="close">${fromJoin ? 'I’m not on this list' : 'Done'}</button></div>`
+      : '<p class="muted small">There’s no unclaimed history in this league.</p>'}
+  </div>`);
+}
+Object.assign(A, {
+  'lg-claims-open': () => openClaim(false),
+  'lg-claim': async t => {
+    const k = t.dataset.k, nm = t.querySelector('b').textContent, next = [...new Set([...myClaims(), k])];
+    try {
+      const be = await lgBackend(); await be.setClaims(S.league.code, next);
+      const me = LGD.members.find(m => m.id === LGD.uid); if (me) me.claims = next;
+      closeSheet(); renderLeague(); toast(`${nm}’s past results now count for you.`);
+    } catch (e) { toast('Couldn’t link those results. Check your connection and try again.'); }
+  },
+  'lg-release': async t => {
+    const next = myClaims().filter(c => c !== t.dataset.k);
+    try { const be = await lgBackend(); await be.setClaims(S.league.code, next); const me = LGD.members.find(m => m.id === LGD.uid); if (me) me.claims = next; openClaim(false); renderLeague(); toast('Unlinked.'); }
+    catch (e) { toast('Couldn’t unlink them. Check your connection and try again.'); }
+  },
+  'lg-unclaim': async t => {
+    const mem = LGD.members.find(m => m.id === t.dataset.uid); if (!mem) return;
+    const next = (mem.claims || []).filter(c => c !== t.dataset.k);
+    try { const be = await lgBackend(); await be.setClaims(S.league.code, next, mem.id); mem.claims = next; closeSheet(); renderLeague(); toast('Unlinked. Those results show under their imported name again.'); }
+    catch (e) { toast('Couldn’t unlink them. Check your connection and try again.'); }
+  },
+});
+
+/* ---------------- import past results (organizer) ---------------- */
+let lgImport = null;
+function readLeagueCSV(text) {
+  const rows = parseCSV(String(text).replace(/^\uFEFF/, ''));
+  if (!rows.length) throw new Error('The file is empty.');
+  const head = rows[0].map(h => h.trim().toLowerCase().replace(/[\s-]+/g, '_'));
+  const find = names => names.map(n => head.indexOf(n)).find(i => i >= 0);
+  const ix = { date: find(['date', 'game_night', 'night']), player: find(['player', 'name']), buyIn: find(['buy_in', 'buyin', 'total_buy_in', 'buy_ins']), cashOut: find(['cash_out', 'cashout', 'ending_stack', 'out']) };
+  const miss = Object.entries({ date: 'date', player: 'player', buyIn: 'buy_in', cashOut: 'cash_out' }).filter(([k]) => ix[k] === undefined).map(([, l]) => l);
+  if (miss.length) throw new Error(`The file needs these columns: date, player, buy_in and cash_out. It’s missing ${miss.join(', ')}.`);
+  const items = [], bad = [];
+  rows.slice(1).forEach((r, i) => {
+    const date = normDate(r[ix.date]), player = String(r[ix.player] || '').trim().replace(/\s+/g, ' ');
+    const buyIn = parseMoney(r[ix.buyIn]), cashOut = parseMoney(r[ix.cashOut]);
+    if (!date || !player || player.length > 24 || buyIn == null || cashOut == null || buyIn > MAX_C || cashOut > MAX_C) { bad.push(i + 2); return; }
+    items.push({ date, player, buyIn, cashOut });
+  });
+  return { items, bad };
+}
+function openImportPicker() {
+  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Import past results</h2><span></span></div>
+  <div class="sheet-body"><p class="muted small" style="margin-top:0">Bring in results from before the league started, like a spreadsheet your group kept. Use a CSV file with one row per player per night and these columns:</p>
+    <p class="code-sample">date, player, buy_in, cash_out</p>
+    <p class="muted small">Rows with your league name (${esc(S.league.player)}) count as your own results. Everyone else’s show under their names, and when friends join with the same name, their history counts toward them.</p>
+    <div class="stack-btns"><button class="btn primary" data-a="lg-imp-choose">Choose a CSV file</button></div>
+    <p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
+}
+function previewImport(name, text) {
+  let res;
+  try { res = readLeagueCSV(text); } catch (e) { messageSheet('Couldn’t import', esc(e.message)); return; }
+  const have = new Set(LGD.results.map(r => [r.date, key(r.player), r.buyIn, r.cashOut].join('|')));
+  const fresh = res.items.filter(it => !have.has([it.date, key(it.player), it.buyIn, it.cashOut].join('|')));
+  const dupes = res.items.length - fresh.length;
+  if (!fresh.length) { messageSheet('Nothing new to import', esc((res.items.length ? 'Every result in this file is already in the league.' : 'No results could be read from this file.') + (res.bad.length ? ` ${res.bad.length} row${res.bad.length === 1 ? '' : 's'} couldn’t be read (row${res.bad.length === 1 ? '' : 's'} ${res.bad.slice(0, 6).join(', ')}).` : ''))); return; }
+  const players = new Map(), nights = new Map();
+  for (const it of fresh) { const k = key(it.player); players.set(k, { name: it.player, n: ((players.get(k) || {}).n || 0) + 1 }); nights.set(it.date, (nights.get(it.date) || 0) + it.cashOut - it.buyIn); }
+  const dates = [...nights.keys()].sort(), off = [...nights.values()].filter(v => Math.abs(v) >= 100).length;
+  const mineN = fresh.filter(it => key(it.player) === key(S.league.player)).length;
+  lgImport = fresh;
+  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Import past results</h2><span></span></div>
+  <div class="sheet-body"><p style="margin-top:0"><b>${fresh.length} results</b> for <b>${players.size} players</b> over <b>${nights.size} game night${nights.size === 1 ? '' : 's'}</b>, from ${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}.</p>
+    <table class="bt stats"><tbody>${[...players.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).map(p => `<tr><td>${esc(p.name)}${key(p.name) === key(S.league.player) ? ' <span class="tag">You</span>' : ''}</td><td>${p.n} night${p.n === 1 ? '' : 's'}</td></tr>`).join('')}</tbody></table>
+    ${mineN ? `<p class="muted small">${mineN} result${mineN === 1 ? '' : 's'} match your league name, so ${mineN === 1 ? 'it counts' : 'they count'} as your own.</p>` : ''}
+    ${off ? `<p class="small warn-text">${off} of the ${nights.size} nights don’t add up to $0 by $1 or more. They’ll import as they are, with the usual warning on each.</p>` : ''}
+    ${dupes ? `<p class="muted small">${dupes} result${dupes === 1 ? ' is' : 's are'} already in the league and will be skipped.</p>` : ''}
+    ${res.bad.length ? `<p class="small warn-text">${res.bad.length} row${res.bad.length === 1 ? '' : 's'} couldn’t be read and will be skipped (row${res.bad.length === 1 ? '' : 's'} ${res.bad.slice(0, 6).join(', ')}${res.bad.length > 6 ? '…' : ''}).</p>` : ''}
+    <div class="stack-btns"><button class="btn primary" data-a="lg-imp-go">Import ${fresh.length} results</button></div>
+    <p class="muted small" id="lg-imp-progress" aria-live="polite"></p><p class="err" id="lg-err" role="alert"></p></div>`, { backdropCloses: false });
+}
+Object.assign(A, {
+  'lg-imp-open': () => openImportPicker(),
+  'lg-imp-choose': () => { const fi = $('#lg-imp-file'); fi.value = ''; fi.click(); },
+  'lg-imp-go': async t => {
+    if (!lgImport) return;
+    t.disabled = true;
+    const me = key(S.league.player), list = lgImport.map(it => key(it.player) === me ? { ...it, player: S.league.player } : { ...it, imported: true });
+    const prog = $('#lg-imp-progress');
+    try {
+      const be = await lgBackend();
+      await be.addResults(S.league.code, list, n => { if (prog) prog.textContent = `Importing… ${n} of ${list.length}`; });
+      lgImport = null; closeSheet(); renderLeague(); toast(`Imported ${list.length} results.`);
+    } catch (e) { t.disabled = false; lgFail('The import stopped partway. Check your connection, then import the same file again. Results already added will be skipped.'); }
+  },
+  'lg-imp-clear': () => {
+    const n = LGD.results.filter(r => r.imported && r.uid === LGD.uid).length;
+    openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Delete imported results</h2><span></span></div>
+    <div class="sheet-body"><p>This deletes the ${n} result${n === 1 ? '' : 's'} you imported for other players, along with their reactions. Results people added themselves aren’t affected.</p>
+    <div class="stack-btns"><button class="btn danger" data-a="lg-imp-clear-go">Delete ${n} imported results</button><button class="btn" data-a="close">Keep them</button></div></div>`);
+  },
+  'lg-imp-clear-go': async () => {
+    const ids = LGD.results.filter(r => r.imported && r.uid === LGD.uid).map(r => r.id);
+    try { const be = await lgBackend(); await be.deleteResults(S.league.code, ids); closeSheet(); toast(`Deleted ${ids.length} imported results.`); }
+    catch (e) { toast('Couldn’t delete them. Check your connection and try again.'); }
+  },
+});
+$('#lg-imp-file').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  if (f.size > 5e6) { messageSheet('Couldn’t import', 'That file is too large.'); return; }
+  try { previewImport(f.name, await f.text()); } catch (err) { messageSheet('Couldn’t import', 'The file couldn’t be read.'); }
+});
 
 /* ---------------- league GIF pack ---------------- */
 const LGIF_TYPES = ['image/gif', 'image/webp', 'image/png', 'image/jpeg'], LGIF_MAX = 500 * 1024;
@@ -2682,7 +2848,7 @@ const PLAYER_COLORS = ['#2f6fe4', '#e5483d', '#f28a1a', '#1fa463', '#9467bd', '#
 let lgHL = '';   // player highlighted on the profit-over-time chart
 function lgPlayers() {
   const st = lgStandings();
-  return st.map((p, i) => ({ ...p, k: key(p.name), color: PLAYER_COLORS[i % PLAYER_COLORS.length], results: LGD.results.filter(r => key(r.player) === key(p.name)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0) }));
+  return st.map((p, i) => ({ ...p, k: key(p.name), color: PLAYER_COLORS[i % PLAYER_COLORS.length], results: LGD.results.filter(r => key(pName(r)) === key(p.name)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0) }));
 }
 function lgChartsHTML() {
   if (LGD.results.length < 1) return '';
