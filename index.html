@@ -340,6 +340,7 @@ input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webki
 .code { letter-spacing: .08em; }
 .code-in { text-transform: uppercase; letter-spacing: .2em; font-size: 22px !important; text-align: center; }
 table.standings td.rank { width: 1.8em; font-weight: 700; color: var(--ink2); }
+table.standings tr.gap td { text-align: center; color: var(--ink2); padding: 0; line-height: 1; }
 section.night h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 17px; margin-top: 26px; }
 .zs { margin-top: 8px; }
 .warn-text { color: var(--loss-t); }
@@ -373,6 +374,10 @@ section.night h2 { display: flex; justify-content: space-between; align-items: b
 #gif-q { margin-top: 2px; }
 .giphy-mark { text-align: center; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink2); margin: 12px 0 0; }
 .lg-switch { margin: 4px 0 12px; }
+.season-pick { flex-wrap: nowrap; overflow-x: auto; margin: 16px -20px 4px; padding: 2px 20px; scrollbar-width: none; }
+.season-pick::-webkit-scrollbar { display: none; }
+.season-pick .chip { flex: none; }
+.season-range { margin: 4px 0 14px; }
 .code-sample { font-family: ui-monospace, Menlo, monospace; font-size: 14px; background: var(--field); border-radius: 8px; padding: 8px 10px; }
 .also-sess { margin: 4px 0 12px; align-items: flex-start; }
 .also-sess input { margin-top: 2px; }
@@ -2116,6 +2121,7 @@ async function fbBackend() {
   fbConn = {
     uid: user.uid,
     async getLeague(code) { const d = await F.getDoc(L(code)); return d.exists() ? { code, ...d.data() } : null; },
+    async setSeasons(code, seasons) { await F.updateDoc(L(code), { seasons }); },
     async createLeague(code, name) { await F.setDoc(L(code), { name, createdBy: user.uid, createdAt: F.serverTimestamp() }); },
     async setMember(code, name) { await F.setDoc(F.doc(db, 'leagues', code, 'members', user.uid), { name, joinedAt: F.serverTimestamp() }, { merge: true }); },
     async setClaims(code, claims, uid) { await F.updateDoc(F.doc(db, 'leagues', code, 'members', uid || user.uid), { claims }); },
@@ -2196,6 +2202,20 @@ function lgStart() {
   }).catch(() => { LGD.error = 'Couldn’t connect to the league. Check your connection and try again.'; if (tab === 'league') renderLeague(); });
 }
 const lgNet = r => r.cashOut - r.buyIn;
+const lgSeasons = () => (LGD.league && Array.isArray(LGD.league.seasons) ? LGD.league.seasons : [])
+  .filter(x => x && typeof x.name === 'string' && isISO(x.start) && (!x.end || isISO(x.end))).slice().sort((a, b) => a.start < b.start ? 1 : -1);
+const inSeason = (d, x) => d >= x.start && (!x.end || d <= x.end);
+const lgSeasonPick = {};   // league code -> chosen season id, or 'all'
+function curSeasonId() {
+  const list = lgSeasons(); if (!list.length) return 'all';
+  const picked = lgSeasonPick[S.league.code];
+  if (picked && (picked === 'all' || list.some(x => x.id === picked))) return picked;
+  const today = todayISO(), now = list.find(x => inSeason(today, x)) || list.find(x => !x.end) || list[0];
+  return now.id;
+}
+const curSeason = () => { const id = curSeasonId(); return id === 'all' ? null : lgSeasons().find(x => x.id === id) || null; };
+// Results shown in standings, game nights and charts: the chosen season, or everything for All time.
+const lgRes = () => { const x = curSeason(); return x ? LGD.results.filter(r => inSeason(r.date, x)) : LGD.results; };
 const isMine = r => r.uid === LGD.uid && !r.imported;   // imported history isn't yours, even though you added it
 // Claims link an imported name (like "Jackson") to a member, so that history shows under the member's current name.
 function lgClaimMap() {
@@ -2222,7 +2242,7 @@ function unclaimedNames() {
 const myClaims = () => { const me = LGD.members.find(m => m.id === LGD.uid); return me && Array.isArray(me.claims) ? me.claims : []; };
 function lgStandings() {
   const m = new Map();
-  for (const r of LGD.results) {
+  for (const r of lgRes()) {
     const nm = pName(r) || '?', k = key(nm), e = m.get(k) || { name: nm, n: 0, total: 0, best: -Infinity, wins: 0 };
     e.name = nm; e.n++; e.total += lgNet(r); e.best = Math.max(e.best, lgNet(r)); if (lgNet(r) > 0) e.wins++;
     m.set(k, e);
@@ -2284,15 +2304,23 @@ function leagueHTML() {
   if (twin) h += `<p class="warn">Another phone in this league also uses the name ${esc(lg.player)}. If that’s your old phone, you’re all set. If it’s someone else, change your name under League options so your results aren’t combined.</p>`;
   h += `<button class="btn primary wide" data-a="lg-add">Add my result</button>
     <div class="seg two-up" role="group" aria-label="Show" style="margin-top:14px">${[['standings', 'Standings'], ['nights', 'Game nights']].map(([v, l]) => `<button data-a="lg-view" data-v="${v}" aria-pressed="${lgView === v}">${l}</button>`).join('')}</div>`;
+  const seasons = lgSeasons(), sid = curSeasonId(), cs = curSeason();
+  if (seasons.length) h += `<div class="chips season-pick" role="group" aria-label="Season">${[{ id: 'all', name: 'All time' }, ...seasons].map(x => `<button class="chip" data-a="lg-season" data-v="${esc(x.id)}" aria-pressed="${sid === x.id}">${esc(x.name)}</button>`).join('')}</div>
+    <p class="muted small season-range">${cs ? `${fmtDate(cs.start)} to ${cs.end ? fmtDate(cs.end) : 'now'}` : 'Every game night, across all seasons'}</p>`;
   if (!LGD.results.length) return h + `<p class="note">No results yet. After your next game, tap Add my result, and ask everyone else to add theirs.</p>` + lgFoot();
+  if (!lgRes().length) return h + `<p class="note">No results in ${esc(cs.name)} yet.</p>` + lgFoot();
   if (lgView === 'standings') {
-    const st = lgStandings();
-    h += `<table class="bt list standings"><thead><tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Total</th></tr></thead><tbody>
-      ${st.map((p, i) => `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">Average <span class="nw">${usdC(p.total / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div></td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`).join('')}
-    </tbody></table><p class="muted small">Ranked by total profit/loss across every game night. Tap a player to see their results.</p>` + lgChartsHTML();
+    const st = lgStandings(), me = st.findIndex(p => key(p.name) === key(lg.player));
+    const shown = st.slice(0, 3).map((p, i) => [p, i]);
+    if (me >= 3) shown.push([st[me], me]);
+    h += `<table class="bt list standings"><thead>${STANDINGS_HEAD}</thead><tbody>
+      ${shown.map(([p, i], j) => (j === 3 ? '<tr class="gap" aria-hidden="true"><td colspan="4">⋮</td></tr>' : '') + standingRow(p, i, lg)).join('')}
+    </tbody></table>
+    ${st.length > 3 ? `<div class="stack-btns" style="margin-top:10px"><button class="btn" data-a="lg-all">See all ${st.length} players</button></div>` : ''}
+    <p class="muted small">Ranked by total profit/loss ${cs ? `in ${esc(cs.name)}` : 'across every game night'}. Tap a player to see their results.</p>` + lgChartsHTML();
   } else {
     const nights = new Map();
-    for (const r of LGD.results) { if (!nights.has(r.date)) nights.set(r.date, []); nights.get(r.date).push(r); }
+    for (const r of lgRes()) { if (!nights.has(r.date)) nights.set(r.date, []); nights.get(r.date).push(r); }
     for (const d of [...nights.keys()].sort().reverse()) {
       const list = nights.get(d).sort((a, b) => lgNet(b) - lgNet(a)), sum = list.reduce((a, r) => a + lgNet(r), 0);
       h += `<section class="night"><h2><span>${fmtDate(d)}</span><span class="muted small">${list.length} player${list.length === 1 ? '' : 's'}</span></h2>
@@ -2303,6 +2331,14 @@ function leagueHTML() {
   }
   return h + lgFoot();
 }
+const STANDINGS_HEAD = `<tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Total</th></tr>`;
+function standingRow(p, i, lg) { return `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">Average <span class="nw">${usdC(p.total / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div></td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`; }
+function openAllStandings() {
+  const st = lgStandings(), lg = S.league;
+  openSheet(`<div class="sheet-head"><span></span><h2>${curSeason() ? esc(curSeason().name) : 'All-time standings'}</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><table class="bt list standings"><thead>${STANDINGS_HEAD}</thead><tbody>${st.map((p, i) => standingRow(p, i, lg)).join('')}</tbody></table>
+    <p class="muted small">Tap a player to see their results.</p></div>`);
+}
 const lgFoot = () => {
   const lg = S.league, types = typesAlpha();
   return `<section class="an"><h2>League options</h2>
@@ -2311,6 +2347,7 @@ const lgFoot = () => {
     <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small">Changing it also updates the name on your past results.</p>
     ${LGD.results.some(r => r.imported) ? `<div class="stack-btns"><button class="btn" data-a="lg-claims-open">Past results${myClaims().length ? ' (linked)' : ''}</button></div><p class="muted small" style="margin-top:6px">Link imported results under an old name to you.</p>` : ''}
+    ${LGD.league && (LGD.league.createdBy === LGD.uid || lgSeasons().length) ? `<div class="stack-btns"><button class="btn" data-a="lg-seasons">Seasons</button></div>` : ''}
     <div class="stack-btns"><button class="btn" data-a="lg-pack">League GIFs</button>
     ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn" data-a="lg-imp-open">Import past results</button>${LGD.results.some(r => r.imported && r.uid === LGD.uid) ? '<button class="btn danger" data-a="lg-imp-clear">Delete imported results</button>' : ''}` : ''}</div></section>
     <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
@@ -2394,7 +2431,7 @@ function openResult(id) {
   </div>`);
 }
 function openPlayer(name) {
-  const list = LGD.results.filter(r => key(pName(r)) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
+  const list = lgRes().filter(r => key(pName(r)) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(name)}</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body">${(() => {
       const mem = LGD.members.find(m => key(m.name) === key(name)), cl = mem && Array.isArray(mem.claims) ? mem.claims : [];
@@ -2424,6 +2461,7 @@ function lgWrite(fn, okMsg) {
 let lgDupOk = '';
 Object.assign(A, {
   'lg-view': t => { lgView = t.dataset.v; renderLeague(); },
+  'lg-all': () => openAllStandings(),
   'lg-open': t => { S.leagueCur = t.dataset.code; lgOpen = true; save(); lgStart(); renderLeague(); window.scrollTo(0, 0); },
   'lg-back': () => { lgOpen = false; renderLeague(); window.scrollTo(0, 0); },
   'lg-join-open': () => openJoin('code', pendingLeague ? pendingLeague.code : ''),
@@ -2587,6 +2625,62 @@ Object.assign(A, {
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
 document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#lg-also-box').hidden = !e.target.checked; lgCalc(); } else if (e.target.id === 'lg-date' && $('#lgf')) lgCalc(); });
+
+/* ---------------- seasons (organizer) ---------------- */
+const seasonCount = x => LGD.results.filter(r => inSeason(r.date, x)).length;
+function openSeasons() {
+  const list = lgSeasons(), org = LGD.league && LGD.league.createdBy === LGD.uid;
+  openSheet(`<div class="sheet-head"><span></span><h2>Seasons</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><p class="muted small" style="margin-top:0">Each season is a date range. Results count toward the season their game night falls in, and always toward All time.</p>
+    ${list.length ? `<div class="add-menu">${list.map(x => `<button class="add-opt" data-a="${org ? 'lg-season-edit' : 'noop'}" data-v="${esc(x.id)}"><b>${esc(x.name)}${!x.end ? ' <span class="tag">Current</span>' : ''}</b><span class="muted small">${fmtDate(x.start)} to ${x.end ? fmtDate(x.end) : 'now'}, ${seasonCount(x)} result${seasonCount(x) === 1 ? '' : 's'}</span></button>`).join('')}</div>` : '<p class="note">No seasons yet.</p>'}
+    ${org ? `<div class="stack-btns"><button class="btn primary" data-a="lg-season-new">${list.some(x => !x.end) ? 'Start a new season' : 'Add a season'}</button></div>` : ''}
+    ${(() => { const out = LGD.results.filter(r => list.length && !list.some(x => inSeason(r.date, x))).length; return out ? `<p class="muted small">${out} result${out === 1 ? ' falls' : 's fall'} outside every season. ${out === 1 ? 'It counts' : 'They count'} toward All time only.</p>` : ''; })()}
+  </div>`);
+}
+function openSeasonForm(x) {
+  const list = lgSeasons(), open = list.find(y => !y.end && (!x || y.id !== x.id));
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-seasons">Back</button><h2>${x ? 'Edit season' : open ? 'New season' : 'Add a season'}</h2><button class="link strong" data-a="lg-season-save"${x ? ` data-v="${esc(x.id)}"` : ''}>Save</button></div>
+  <div class="sheet-body"><form id="sf2" novalidate>
+    <label class="field"><span>Name</span><input type="search" id="se-name" value="${esc(x ? x.name : '')}" maxlength="24" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="2027-2028"></label>
+    <div class="two"><label class="field"><span>Starts</span><input type="date" id="se-start" value="${x ? x.start : todayISO()}"></label>
+    <label class="field"><span>Ends</span><input type="date" id="se-end" value="${x && x.end ? x.end : ''}"></label></div>
+    <p class="muted small">Leave Ends empty while the season is still going.${!x && open ? ` ${esc(open.name)} will end the day before this season starts.` : ''}</p>
+    <p class="err" id="lg-err" role="alert"></p>
+    ${x ? `<div class="stack-btns"><button type="button" class="btn danger" data-a="lg-season-del" data-v="${esc(x.id)}">Delete season</button></div><p class="muted small">Deleting a season keeps its results. They still count toward All time.</p>` : ''}
+  </form></div>`, { backdropCloses: false });
+}
+async function saveSeasons(list, msg) {
+  try { const be = await lgBackend(); await be.setSeasons(S.league.code, list); if (LGD.league) LGD.league.seasons = list; openSeasons(); renderLeague(); toast(msg); }
+  catch (e) { lgFail('Couldn’t save the seasons. Check your connection and try again.'); }
+}
+const dayBefore = d => { const t = new Date(tms(d) - DAY); return iso(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); };
+Object.assign(A, {
+  'lg-seasons': () => openSeasons(),
+  'lg-season': t => { lgSeasonPick[S.league.code] = t.dataset.v; renderLeague(); },
+  'lg-season-new': () => openSeasonForm(null),
+  'lg-season-edit': t => openSeasonForm(lgSeasons().find(x => x.id === t.dataset.v)),
+  'lg-season-save': t => {
+    const name = $('#se-name').value.trim().replace(/\s+/g, ' '), start = $('#se-start').value, end = $('#se-end').value || null, id = t.dataset.v;
+    if (!name) return lgFail('Give the season a name, like 2027-2028.');
+    if (!isISO(start)) return lgFail('Pick the date the season starts.');
+    if (end && end < start) return lgFail('The season has to end after it starts.');
+    let list = lgSeasons().map(x => ({ ...x }));
+    if (list.some(x => x.id !== id && key(x.name) === key(name))) return lgFail(`There’s already a season called ${name}.`);
+    if (!id) { const open = list.find(x => !x.end); if (open) { if (dayBefore(start) < open.start) return lgFail(`${open.name} started ${fmtDate(open.start)}, so the new season has to start after that.`); open.end = dayBefore(start); } }
+    const me = { id: id || uid().slice(0, 12), name, start, end };
+    const others = list.filter(x => x.id !== me.id);
+    const clash = others.find(x => start <= (x.end || '9999-12-31') && (end || '9999-12-31') >= x.start);
+    if (clash) return lgFail(`That overlaps ${clash.name} (${fmtDate(clash.start)} to ${clash.end ? fmtDate(clash.end) : 'now'}). Seasons can’t overlap.`);
+    list = [...others, me];
+    if (!id) lgSeasonPick[S.league.code] = me.id;
+    saveSeasons(list, id ? 'Season updated.' : `${name} added.`);
+  },
+  'lg-season-del': t => {
+    const x = lgSeasons().find(y => y.id === t.dataset.v); if (!x) return;
+    if (lgSeasonPick[S.league.code] === x.id) delete lgSeasonPick[S.league.code];
+    saveSeasons(lgSeasons().filter(y => y.id !== x.id), `Deleted ${x.name}. Its results still count toward All time.`);
+  },
+});
 
 /* ---------------- claiming imported history ---------------- */
 let lgClaimAsk = false;   // ask "are you one of these players?" once the league loads after joining
@@ -2848,11 +2942,11 @@ const PLAYER_COLORS = ['#2f6fe4', '#e5483d', '#f28a1a', '#1fa463', '#9467bd', '#
 let lgHL = '';   // player highlighted on the profit-over-time chart
 function lgPlayers() {
   const st = lgStandings();
-  return st.map((p, i) => ({ ...p, k: key(p.name), color: PLAYER_COLORS[i % PLAYER_COLORS.length], results: LGD.results.filter(r => key(pName(r)) === key(p.name)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0) }));
+  return st.map((p, i) => ({ ...p, k: key(p.name), color: PLAYER_COLORS[i % PLAYER_COLORS.length], results: lgRes().filter(r => key(pName(r)) === key(p.name)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0) }));
 }
 function lgChartsHTML() {
-  if (LGD.results.length < 1) return '';
-  const many = new Set(LGD.results.map(r => r.date)).size > 1;
+  if (lgRes().length < 1) return '';
+  const many = new Set(lgRes().map(r => r.date)).size > 1;
   return `<section class="an"><h2>Net winnings</h2><figure id="lg-bars"><div class="chart"></div><div class="readout" aria-live="polite"></div></figure></section>
     ${many ? `<section class="an"><h2>Profit over time</h2><figure id="lg-lines"><div class="chart"></div><div class="lg-legend" role="group" aria-label="Highlight a player"></div><div class="readout" aria-live="polite"></div>
       <figcaption>Each player’s running total across game nights. Tap a name to highlight it.</figcaption></figure></section>` : ''}
@@ -2891,7 +2985,7 @@ function drawLgBars(fig, P) {
 }
 function drawLgLines(fig, P) {
   const el = fig.querySelector('.chart'), out = fig.querySelector('.readout'), leg = fig.querySelector('.lg-legend');
-  const dates = [...new Set(LGD.results.map(r => r.date))].sort();
+  const dates = [...new Set(lgRes().map(r => r.date))].sort();
   // each player's running total on every game night (flat on nights they skipped)
   const series = P.map(p => {
     let c = 0; const byDate = new Map();
