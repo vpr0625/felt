@@ -2300,7 +2300,7 @@ function leagueHTML() {
       <div class="stack-btns lg-top-btns"><button class="btn primary" data-a="lg-join-open">Join a league</button><button class="btn" data-a="lg-create-open">Start a league</button></div>
       <h2 class="lg-list-h">Your leagues</h2>
       <div class="lg-list">${S.leagues.map(l => `<button class="lg-card" data-a="lg-open" data-code="${l.code}">
-        <span class="lg-card-txt"><b>${esc(l.name)}</b><span class="muted small">Playing as ${esc(l.player)}${l.type ? `, for ${esc(l.type)}` : ''}</span></span>
+        <span class="lg-card-txt"><b>${esc(l.name)}</b><span class="muted small">Playing as ${esc(l.player)}</span></span>
         <span class="chev-r" aria-hidden="true"></span></button>`).join('')}</div>${recentHTML()}`;
   }
   if (!S.league) {
