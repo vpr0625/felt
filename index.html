@@ -333,6 +333,16 @@ input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webki
 .add-opt b { font-size: 17px; }
 .lg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 14px; }
 .lg-title { min-width: 0; }
+.lg-head-btns { display: flex; align-items: center; gap: 6px; flex: none; }
+.opts-btn { border: 1px solid var(--fieldline); border-radius: 12px; width: 46px; height: 46px; }
+.opts-btn svg { width: 22px; height: 22px; }
+.opt-list { display: grid; border: 1px solid var(--fieldline); border-radius: 14px; overflow: hidden; margin: 4px 0 6px; }
+.opt-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 12px 14px; border: 0; background: var(--field); }
+.opt-row + .opt-row { border-top: 1px solid var(--fieldline); }
+.opt-row:active { background: var(--press); }
+.opt-row > span:first-child { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.opt-row b { font-weight: 600; }
+.opt-row.danger b { color: var(--loss-t); }
 .lg-switcher { border: 0; background: none; padding: 4px 6px 4px 0; text-align: left; border-radius: 10px; }
 .lg-switcher:active { background: var(--press); }
 .chev { display: inline-block; width: 8px; height: 8px; margin: 0 0 4px 4px; border-right: 2px solid var(--ink2); border-bottom: 2px solid var(--ink2); transform: rotate(45deg); }
@@ -2295,7 +2305,7 @@ function leagueHTML() {
   }
   const lg = S.league;
   let h = `<div class="lg-head"><div class="lg-title muted small">Playing as ${esc(lg.player)}<br>Code <b class="code">${esc(lg.code)}</b></div>
-    <button class="btn" data-a="lg-share">Invite</button></div>`;
+    <div class="lg-head-btns"><button class="btn" data-a="lg-share">Invite</button><button class="icon opts-btn" data-a="lg-opts" aria-label="League options"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button></div></div>`;
   if (LGD.ready && !LGD.league) return h + `<p class="warn">This league was deleted by its organizer, so its results are gone.</p><div class="stack-btns"><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
   if (LGD.rejoin && !(LGD.ready && LGD.league)) return h + `<p class="warn">This phone isn’t signed in to ${esc(lg.name)} yet. That happens after restoring a backup or re-adding the app to your home screen.</p><div class="stack-btns"><button class="btn primary" data-a="lg-rejoin">Rejoin as ${esc(lg.player)}</button><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
   if (LGD.error) h += `<p class="warn">${esc(LGD.error)}</p>`;
@@ -2307,8 +2317,8 @@ function leagueHTML() {
   const seasons = lgSeasons(), sid = curSeasonId(), cs = curSeason();
   if (seasons.length) h += `<div class="chips season-pick" role="group" aria-label="Season">${[{ id: 'all', name: 'All time' }, ...seasons].map(x => `<button class="chip" data-a="lg-season" data-v="${esc(x.id)}" aria-pressed="${sid === x.id}">${esc(x.name)}</button>`).join('')}</div>
     <p class="muted small season-range">${cs ? `${fmtDate(cs.start)} to ${cs.end ? fmtDate(cs.end) : 'now'}` : 'Every game night, across all seasons'}</p>`;
-  if (!LGD.results.length) return h + `<p class="note">No results yet. After your next game, tap Add my result, and ask everyone else to add theirs.</p>` + lgFoot();
-  if (!lgRes().length) return h + `<p class="note">No results in ${esc(cs.name)} yet.</p>` + lgFoot();
+  if (!LGD.results.length) return h + `<p class="note">No results yet. After your next game, tap Add my result, and ask everyone else to add theirs.</p>`;
+  if (!lgRes().length) return h + `<p class="note">No results in ${esc(cs.name)} yet.</p>`;
   if (lgView === 'standings') {
     const st = lgStandings(), me = st.findIndex(p => key(p.name) === key(lg.player));
     const shown = st.slice(0, 3).map((p, i) => [p, i]);
@@ -2329,7 +2339,7 @@ function leagueHTML() {
     }
     h += `<p class="muted small">Tap a result to react to it.</p>`;
   }
-  return h + lgFoot();
+  return h;
 }
 const STANDINGS_HEAD = `<tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Total</th></tr>`;
 function standingRow(p, i, lg) { return `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">Average <span class="nw">${usdC(p.total / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div></td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`; }
@@ -2339,20 +2349,32 @@ function openAllStandings() {
   <div class="sheet-body"><table class="bt list standings"><thead>${STANDINGS_HEAD}</thead><tbody>${st.map((p, i) => standingRow(p, i, lg)).join('')}</tbody></table>
     <p class="muted small">Tap a player to see their results.</p></div>`);
 }
-const lgFoot = () => {
-  const lg = S.league, types = typesAlpha();
-  return `<section class="an"><h2>League options</h2>
+// League options, grouped in one panel opened from the ⋯ button next to Invite.
+function openLeagueOptions() {
+  const lg = S.league, types = typesAlpha(), org = LGD.league && LGD.league.createdBy === LGD.uid;
+  const row = (act, label, sub, cls = '') => `<button class="opt-row ${cls}" data-a="${act}"><span><b>${label}</b>${sub ? `<span class="muted small">${sub}</span>` : ''}</span><span class="chev-r" aria-hidden="true"></span></button>`;
+  openSheet(`<div class="sheet-head"><span></span><h2>League options</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body" id="lg-opts">
+    <h3>You</h3>
+    <label class="field"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
+    <p class="muted small" style="margin-top:-8px">Changing it also updates the name on your past results.</p>
+    ${LGD.results.some(r => r.imported) ? `<div class="opt-list">${row('lg-claims-open', 'Past results', myClaims().length ? 'Linked to you' : 'Link imported results under an old name to you')}</div>` : ''}
+    <h3>League</h3>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
-    <p class="muted small">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
-    <label class="field" style="margin-top:14px"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
-    <p class="muted small">Changing it also updates the name on your past results.</p>
-    ${LGD.results.some(r => r.imported) ? `<div class="stack-btns"><button class="btn" data-a="lg-claims-open">Past results${myClaims().length ? ' (linked)' : ''}</button></div><p class="muted small" style="margin-top:6px">Link imported results under an old name to you.</p>` : ''}
-    ${LGD.league && (LGD.league.createdBy === LGD.uid || lgSeasons().length) ? `<div class="stack-btns"><button class="btn" data-a="lg-seasons">Seasons</button></div>` : ''}
-    <div class="stack-btns"><button class="btn" data-a="lg-pack">League GIFs</button>
-    ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn" data-a="lg-imp-open">Import past results</button>${LGD.results.some(r => r.imported && r.uid === LGD.uid) ? '<button class="btn danger" data-a="lg-imp-clear">Delete imported results</button>' : ''}` : ''}</div></section>
-    <div class="live-foot"><button class="btn danger wide" data-a="lg-leave">Leave ${esc(lg.name)}</button>
-    ${LGD.league && LGD.league.createdBy === LGD.uid ? `<button class="btn danger wide" data-a="lg-delete">Delete league for everyone</button><p class="muted small" style="margin:-6px 0 0">You started this league, so you can delete it.</p>` : ''}</div>`;
-};
+    <p class="muted small" style="margin-top:-8px">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
+    <div class="opt-list">
+      ${org || lgSeasons().length ? row('lg-seasons', 'Seasons', lgSeasons().length ? `${lgSeasons().length} season${lgSeasons().length === 1 ? '' : 's'}` : 'Group results into seasons') : ''}
+      ${row('lg-pack', 'League GIFs', 'Upload GIFs everyone can react with')}
+    </div>
+    ${org ? `<h3>Organizer</h3><div class="opt-list">
+      ${row('lg-imp-open', 'Import past results', 'Bring in results from a CSV file')}
+      ${LGD.results.some(r => r.imported && r.uid === LGD.uid) ? row('lg-imp-clear', 'Delete imported results', '', 'danger') : ''}
+    </div>` : ''}
+    <div class="stack-btns" style="margin-top:26px"><button class="btn danger" data-a="lg-leave">Leave ${esc(lg.name)}</button>
+    ${org ? `<button class="btn danger" data-a="lg-delete">Delete league for everyone</button>` : ''}</div>
+    ${org ? '<p class="muted small">You started this league, so you can delete it.</p>' : ''}
+  </div>`);
+}
 function recentHTML() {
   if (!S.leftLeagues.length) return '';
   return `<div class="recent-left"><div class="recent-head"><h3>Recently left</h3><button class="link" data-a="lg-left-clear">Clear</button></div>
@@ -2461,6 +2483,7 @@ function lgWrite(fn, okMsg) {
 let lgDupOk = '';
 Object.assign(A, {
   'lg-view': t => { lgView = t.dataset.v; renderLeague(); },
+  'lg-opts': () => openLeagueOptions(),
   'lg-all': () => openAllStandings(),
   'lg-open': t => { S.leagueCur = t.dataset.code; lgOpen = true; save(); lgStart(); renderLeague(); window.scrollTo(0, 0); },
   'lg-back': () => { lgOpen = false; renderLeague(); window.scrollTo(0, 0); },
@@ -2548,7 +2571,7 @@ Object.assign(A, {
     const name = $('#lg-who-edit').value.trim().replace(/\s+/g, ' ');
     if (!name || name === S.league.player) return;
     const code = S.league.code, ids = LGD.results.filter(isMine).map(r => r.id);
-    S.league.player = name; S.settings.playerName = name; save(); renderLeague();
+    S.league.player = name; S.settings.playerName = name; save(); renderLeague(); if ($('#lg-opts')) openLeagueOptions();
     lgWrite(async be => { await be.setMember(code, name); await be.renamePlayer(code, ids, name); }, `You’re now ${name} in this league.`);
   },
   'lg-react': async t => {
@@ -2630,7 +2653,7 @@ document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#
 const seasonCount = x => LGD.results.filter(r => inSeason(r.date, x)).length;
 function openSeasons() {
   const list = lgSeasons(), org = LGD.league && LGD.league.createdBy === LGD.uid;
-  openSheet(`<div class="sheet-head"><span></span><h2>Seasons</h2><button class="link strong" data-a="close">Done</button></div>
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Seasons</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><p class="muted small" style="margin-top:0">Each season is a date range. Results count toward the season their game night falls in, and always toward All time.</p>
     ${list.length ? `<div class="add-menu">${list.map(x => `<button class="add-opt" data-a="${org ? 'lg-season-edit' : 'noop'}" data-v="${esc(x.id)}"><b>${esc(x.name)}${!x.end ? ' <span class="tag">Current</span>' : ''}</b><span class="muted small">${fmtDate(x.start)} to ${x.end ? fmtDate(x.end) : 'now'}, ${seasonCount(x)} result${seasonCount(x) === 1 ? '' : 's'}</span></button>`).join('')}</div>` : '<p class="note">No seasons yet.</p>'}
     ${org ? `<div class="stack-btns"><button class="btn primary" data-a="lg-season-new">${list.some(x => !x.end) ? 'Start a new season' : 'Add a season'}</button></div>` : ''}
@@ -2687,7 +2710,7 @@ let lgClaimAsk = false;   // ask "are you one of these players?" once the league
 function openClaim(fromJoin) {
   const list = unclaimedNames(), mine = myClaims();
   const minesNames = mine.map(c => (LGD.results.find(r => r.imported && key(r.player) === c) || { player: c }).player);
-  openSheet(`<div class="sheet-head"><span></span><h2>${fromJoin ? 'Welcome to ' + esc(S.league.name) : 'Past results'}</h2><button class="link strong" data-a="close">${fromJoin ? 'Skip' : 'Done'}</button></div>
+  openSheet(`<div class="sheet-head">${fromJoin ? '<span></span>' : '<button class="link" data-a="lg-opts">Back</button>'}<h2>${fromJoin ? 'Welcome to ' + esc(S.league.name) : 'Past results'}</h2><button class="link strong" data-a="close">${fromJoin ? 'Skip' : 'Done'}</button></div>
   <div class="sheet-body">
     ${mine.length ? `<p class="muted small" style="margin-top:0">Linked to you: ${minesNames.map((n, i) => `<b>${esc(n)}</b> <button class="link inline" data-a="lg-release" data-k="${esc(mine[i])}">Unlink</button>`).join(', ')}</p>` : ''}
     ${list.length ? `<p style="margin-top:0"><b>Are you one of these players?</b></p><p class="muted small">This league has results from before it started. Tap your old name to count that history as yours. You’ll still go by ${esc(S.league.player)}.</p>
@@ -2739,7 +2762,7 @@ function readLeagueCSV(text) {
   return { items, bad };
 }
 function openImportPicker() {
-  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Import past results</h2><span></span></div>
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Import past results</h2><span></span></div>
   <div class="sheet-body"><p class="muted small" style="margin-top:0">Bring in results from before the league started, like a spreadsheet your group kept. Use a CSV file with one row per player per night and these columns:</p>
     <p class="code-sample">date, player, buy_in, cash_out</p>
     <p class="muted small">Rows with your league name (${esc(S.league.player)}) count as your own results. Everyone else’s show under their names, and when friends join with the same name, their history counts toward them.</p>
@@ -2855,7 +2878,7 @@ async function loadPack(manage) {
   catch (e) { grid.innerHTML = '<p class="note">Couldn’t load the league’s GIFs. Check your connection and try again.</p>'; }
 }
 function openPack() {
-  openSheet(`<div class="sheet-head"><span></span><h2>League GIFs</h2><button class="link strong" data-a="close">Done</button></div>
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>League GIFs</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><p class="muted small">Everyone in ${esc(S.league.name)} can react with these. You can delete your own uploads${LGD.league && LGD.league.createdBy === LGD.uid ? ', and anyone’s as the organizer' : ''}.</p>
     <div class="stack-btns"><button class="btn" data-a="lg-lgif-upload">Upload a GIF</button></div>
     <p class="err" id="gif-err" role="alert"></p>
