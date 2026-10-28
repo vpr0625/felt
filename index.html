@@ -2245,7 +2245,9 @@ function claimer(r) {
 // A result the organizer added for a member follows that member's current name.
 const forMember = r => (r.forUid && LGD.members.find(m => m.id === r.forUid)) || null;
 const pName = r => { const f = forMember(r); if (f) return f.name; const c = claimer(r); return c ? c.name : r.player; };
-const isMineOrClaimed = r => isMine(r) || r.forUid === LGD.uid || (claimer(r) && claimer(r).id === LGD.uid);
+// Imported history under your own league name counts as yours too, the same way standings count it.
+const isMineOrClaimed = r => isMine(r) || r.forUid === LGD.uid
+  || (claimer(r) ? claimer(r).id === LGD.uid : !!(r.imported && !forMember(r) && S.league && key(r.player) === key(S.league.player)));
 // Results the organizer brought in from a CSV file (not ones they added for someone)
 const csvImportedByMe = r => r.imported && !r.added && r.uid === LGD.uid;
 // Imported names nobody has claimed yet (and that aren't already a member's own name)
@@ -2363,7 +2365,12 @@ function openLeagueOptions() {
     <h3>You</h3>
     <label class="field"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small" style="margin-top:-8px">Changing it also updates the name on your past results.</p>
-    ${LGD.results.some(r => r.imported && !forMember(r)) ? `<div class="opt-list">${row('lg-claims-open', 'Past results', myClaims().length ? 'Linked to you' : 'Link imported results under an old name to you')}</div>` : ''}
+    ${(() => {
+      const past = LGD.results.some(r => r.imported && !forMember(r)), mine = LGD.results.some(isMineOrClaimed);
+      if (!past && !mine) return '';
+      const n = mine ? toSessPlan(lgToSessType()).add.length : 0;
+      return `<div class="opt-list">${past ? row('lg-claims-open', 'Past results', myClaims().length ? 'Linked to you' : 'Link imported results under an old name to you') : ''}${mine ? row('lg-tosess-open', 'Add to my sessions', n ? `${n} result${n === 1 ? ' isn’t' : 's aren’t'} in your own stats yet` : 'All your results are in your own stats') : ''}</div>`;
+    })()}
     <h3>League</h3>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small" style="margin-top:-8px">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
@@ -2800,7 +2807,8 @@ Object.assign(A, {
     try {
       const be = await lgBackend(); await be.setClaims(S.league.code, next);
       const me = LGD.members.find(m => m.id === LGD.uid); if (me) me.claims = next;
-      closeSheet(); renderLeague(); toast(`${nm}’s past results now count for you.`);
+      renderLeague();
+      if (toSessPlan(lgToSessType()).add.length) openToSess('claim', nm); else { closeSheet(); toast(`${nm}’s past results now count for you.`); }
     } catch (e) { toast('Couldn’t link those results. Check your connection and try again.'); }
   },
   'lg-release': async t => {
@@ -2813,6 +2821,61 @@ Object.assign(A, {
     const next = (mem.claims || []).filter(c => c !== t.dataset.k);
     try { const be = await lgBackend(); await be.setClaims(S.league.code, next, mem.id); mem.claims = next; closeSheet(); renderLeague(); toast('Unlinked. Those results show under their imported name again.'); }
     catch (e) { toast('Couldn’t unlink them. Check your connection and try again.'); }
+  },
+});
+
+/* ---------------- copy league results into your own sessions ---------------- */
+// Every league result that counts as yours: your own, ones you claimed under an old name, and ones the organizer added for you.
+const lgToSessType = () => S.league.type || S.league.name;
+function toSessPlan(type) {
+  const k = key(type || ''), used = new Set(), add = [];
+  const have = S.sessions.filter(s => !s.sample);
+  let already = 0;
+  for (const r of LGD.results.filter(isMineOrClaimed).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) {
+    // a session on the same night with the same amounts (any type), or with this type, is already this result
+    const hit = have.find(s => !used.has(s.id) && s.date === r.date && s.buyIn === r.buyIn && s.stack === r.cashOut)
+      || (k && have.find(s => !used.has(s.id) && s.date === r.date && key(s.type) === k));
+    if (hit) { used.add(hit.id); already++; } else add.push(r);
+  }
+  return { add, already };
+}
+let toSessFrom = '';
+function openToSess(from = 'opts', claimed = '') {
+  toSessFrom = from;
+  const lg = S.league, intro = from === 'claim'
+    ? `<p style="margin-top:0"><b>${esc(claimed)}’s past results now count for you.</b></p><p class="muted small">Add them to your own sessions too, so they show up in Home and Analytics?</p>`
+    : `<p class="muted small" style="margin-top:0">Copies your results from ${esc(lg.name)} into your own sessions, so they count in Home and Analytics. Your league results don’t change.</p>`;
+  openSheet(`<div class="sheet-head">${from === 'opts' ? '<button class="link" data-a="lg-opts">Back</button>' : '<span></span>'}<h2>Add to my sessions</h2><button class="link strong" data-a="close">${from === 'claim' ? 'Not now' : 'Cancel'}</button></div>
+  <div class="sheet-body">${intro}
+    <label class="field"><span>Session type</span><input type="search" id="lg-ts-type" value="${esc(lgToSessType())}" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" enterkeyhint="done"></label>
+    <div id="lg-ts-sum"></div>
+    <p class="err" id="lg-err" role="alert"></p>
+  </div>`, { backdropCloses: false });
+  toSessSum();
+}
+function toSessSum() {
+  const el = $('#lg-ts-sum'); if (!el) return;
+  const type = ($('#lg-ts-type').value || '').trim(), { add, already } = toSessPlan(type);
+  const range = add.length ? (add.length === 1 ? ` from ${fmtDate(add[0].date)}` : `, from ${fmtDate(add[0].date)} to ${fmtDate(add[add.length - 1].date)}`) : '';
+  const tot = add.reduce((a, r) => a + lgNet(r), 0);
+  el.innerHTML = add.length
+    ? `<p>${add.length} result${add.length === 1 ? '' : 's'} to add${range}, ${moneyHTML(tot / 100)} in all.${already ? ` <span class="muted">${already} ${already === 1 ? 'is' : 'are'} already in your sessions and will be skipped.</span>` : ''}</p>
+      <div class="stack-btns"><button class="btn primary" data-a="lg-tosess-go">Add ${add.length} session${add.length === 1 ? '' : 's'}</button></div>`
+    : `<p class="muted">${already ? 'All your results from this league are already in your sessions.' : 'You don’t have any results in this league yet.'}</p>`;
+}
+document.addEventListener('input', e => { if (e.target.id === 'lg-ts-type') { lgFail(''); toSessSum(); } });
+Object.assign(A, {
+  'lg-tosess-open': () => openToSess('opts'),
+  'lg-tosess-go': () => {
+    let type = ($('#lg-ts-type').value || '').trim().replace(/\s+/g, ' ');
+    if (!type) return lgFail('Enter a session type for these sessions.');
+    const known = typeInfo().get(key(type)); if (known) type = known.name;
+    const { add } = toSessPlan(type); if (!add.length) return toSessSum();
+    const snap = snapshot();
+    for (const r of add) S.sessions.push({ id: uid(), seq: ++S.seq, date: r.date, type, buyIn: r.buyIn, stack: r.cashOut });
+    if (!S.league.type) S.league.type = type;   // link the league to this session type, like Also save as a session does
+    save(); closeSheet(); render();
+    toast(`Added ${add.length} ${type} session${add.length === 1 ? '' : 's'}.`, () => restore(snap));
   },
 });
 
