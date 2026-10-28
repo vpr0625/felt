@@ -141,6 +141,7 @@ input { min-width: 0; max-width: 100%; }
 .stepper button:active { background: var(--press); }
 .stepper input { border: 0 !important; border-radius: 0 !important; text-align: center; padding: 8px 0 !important; min-height: 44px; background: transparent !important; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.for-group { margin: 2px 0 6px; }
 .chip { border: 1px solid var(--fieldline); background: transparent; border-radius: 999px; padding: 6px 13px; font-size: 15px; min-height: 36px; }
 .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .hint { margin: -8px 0 14px; }
@@ -2241,12 +2242,16 @@ function claimer(r) {
   if (sig !== claimSig) { claimSig = sig; claimCache = lgClaimMap(); }
   return claimCache.get(key(r.player)) || null;
 }
-const pName = r => { const c = claimer(r); return c ? c.name : r.player; };
-const isMineOrClaimed = r => isMine(r) || (claimer(r) && claimer(r).id === LGD.uid);
+// A result the organizer added for a member follows that member's current name.
+const forMember = r => (r.forUid && LGD.members.find(m => m.id === r.forUid)) || null;
+const pName = r => { const f = forMember(r); if (f) return f.name; const c = claimer(r); return c ? c.name : r.player; };
+const isMineOrClaimed = r => isMine(r) || r.forUid === LGD.uid || (claimer(r) && claimer(r).id === LGD.uid);
+// Results the organizer brought in from a CSV file (not ones they added for someone)
+const csvImportedByMe = r => r.imported && !r.added && r.uid === LGD.uid;
 // Imported names nobody has claimed yet (and that aren't already a member's own name)
 function unclaimedNames() {
   const taken = new Set([...lgClaimMap().keys(), ...LGD.members.map(m => key(m.name))]), out = new Map();
-  for (const r of LGD.results) if (r.imported) { const k = key(r.player); if (!taken.has(k)) { const e = out.get(k) || { k, name: r.player, n: 0 }; e.n++; out.set(k, e); } }
+  for (const r of LGD.results) if (r.imported && !forMember(r)) { const k = key(r.player); if (!taken.has(k)) { const e = out.get(k) || { k, name: r.player, n: 0 }; e.n++; out.set(k, e); } }
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 const myClaims = () => { const me = LGD.members.find(m => m.id === LGD.uid); return me && Array.isArray(me.claims) ? me.claims : []; };
@@ -2277,7 +2282,7 @@ function reactionChips(r) {
 function reactorName(u) {
   if (u === LGD.uid) return 'You';
   const m = LGD.members.find(x => x.id === u); if (m) return m.name;
-  const r = LGD.results.find(x => x.uid === u); return r ? r.player : 'A former member';
+  const r = LGD.results.find(x => x.uid === u && !x.imported); return r ? r.player : 'A former member';
 }
 function renderLeague() { if (tab === 'league') { $('#main').innerHTML = leagueHTML(); setLeagueHeader(); if (lgOpen && lgView === 'standings') drawLeagueCharts(); } }
 function setLeagueHeader() {
@@ -2358,7 +2363,7 @@ function openLeagueOptions() {
     <h3>You</h3>
     <label class="field"><span>Your name in this league</span><div class="add-row"><input type="search" id="lg-who-edit" enterkeyhint="done" value="${esc(lg.player)}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"><button class="btn" data-a="lg-rename">Save</button></div></label>
     <p class="muted small" style="margin-top:-8px">Changing it also updates the name on your past results.</p>
-    ${LGD.results.some(r => r.imported) ? `<div class="opt-list">${row('lg-claims-open', 'Past results', myClaims().length ? 'Linked to you' : 'Link imported results under an old name to you')}</div>` : ''}
+    ${LGD.results.some(r => r.imported && !forMember(r)) ? `<div class="opt-list">${row('lg-claims-open', 'Past results', myClaims().length ? 'Linked to you' : 'Link imported results under an old name to you')}</div>` : ''}
     <h3>League</h3>
     <label class="field"><span>Session type for this league</span><div class="select"><select id="lg-type"><option value="">None</option>${types.map(t => `<option value="${esc(t.name)}"${lg.type && key(lg.type) === key(t.name) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div></label>
     <p class="muted small" style="margin-top:-8px">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
@@ -2367,8 +2372,9 @@ function openLeagueOptions() {
       ${row('lg-pack', 'League GIFs', 'Upload GIFs everyone can react with')}
     </div>
     ${org ? `<h3>Organizer</h3><div class="opt-list">
+      ${row('lg-for-open', 'Add a result for someone', 'For a player who forgot to add theirs')}
       ${row('lg-imp-open', 'Import past results', 'Bring in results from a CSV file')}
-      ${LGD.results.some(r => r.imported && r.uid === LGD.uid) ? row('lg-imp-clear', 'Delete imported results', '', 'danger') : ''}
+      ${LGD.results.some(csvImportedByMe) ? row('lg-imp-clear', 'Delete imported results', '', 'danger') : ''}
     </div>` : ''}
     <div class="stack-btns" style="margin-top:26px"><button class="btn danger" data-a="lg-leave">Leave ${esc(lg.name)}</button>
     ${org ? `<button class="btn danger" data-a="lg-delete">Delete league for everyone</button>` : ''}</div>
@@ -2408,7 +2414,8 @@ function openResultForm(r) {
   const v = r ? { date: r.date, buyIn: (r.buyIn / 100).toFixed(2), out: (r.cashOut / 100).toFixed(2) } : { date: todayISO(), buyIn: '', out: '' };
   openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>${r ? 'Edit result' : 'Add my result'}</h2><button class="link strong" data-a="lg-save">Save</button></div>
   <div class="sheet-body"><form id="lgf" novalidate>
-    ${r && r.imported ? `<label class="field"><span>Player</span><input type="search" id="lg-imp-player" value="${esc(r.player)}" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"></label>` : ''}
+    ${r && forMember(r) ? `<p class="muted small" style="margin-top:0">For ${esc(pName(r))}. To change the player, delete this result and add it again.</p>` : ''}
+    ${r && r.imported && !forMember(r) ? `<label class="field"><span>Player</span><input type="search" id="lg-imp-player" value="${esc(r.player)}" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24"></label>` : ''}
     ${!r && last ? `<button type="button" class="chip" data-a="lg-use-last" data-date="${last.date}" data-in="${last.buyIn}" data-out="${last.stack}" style="margin-bottom:14px">Use my last session: ${fmtDate(last.date, false)}, ${usdC(net(last), true)}</button>` : ''}
     <label class="field"><span>Game night</span><input type="date" id="lg-date" value="${v.date}"></label>
     <div class="two">
@@ -2425,6 +2432,11 @@ function openResultForm(r) {
   lgCalc();
 }
 function lgCalc() {
+  const fn = $('#lg-for-name');
+  if (fn) {
+    document.querySelectorAll('[data-a="lg-for-chip"]').forEach(c => c.setAttribute('aria-pressed', String(key(c.dataset.name) === key(fn.value))));
+    lgFail('');   // a fix clears the last message
+  }
   const a = parseMoney($('#lg-in') && $('#lg-in').value), b = parseMoney($('#lg-out') && $('#lg-out').value), el = $('#lg-calc');
   if (el) el.innerHTML = a != null && b != null ? `Net result ${moneyHTML((b - a) / 100)}.` : '';
   // warn before saving a second session for the same night
@@ -2434,6 +2446,63 @@ function lgCalc() {
     note.textContent = same ? `You already have a ${same.type} session on ${fmtDate(d)}. Saving adds another one, so turn this off if you already logged it.` : '';
   }
 }
+// Organizer tool: add a result for a player who forgot to add their own.
+// Members come first, then past players. A member's result is linked to them, so it follows their name.
+function lgForNames() {
+  const me = key(S.league.player), mem = new Map(), past = new Map(), byName = (a, b) => a.name.localeCompare(b.name);
+  for (const m of LGD.members) { const k = key(m.name || ''); if (m.id !== LGD.uid && k && k !== me && !mem.has(k)) mem.set(k, { name: m.name, mem: m }); }
+  for (const r of LGD.results) { const n = pName(r), k = key(n || ''); if (k && k !== me && !mem.has(k) && !past.has(k)) past.set(k, { name: n }); }
+  return [...[...mem.values()].sort(byName), ...[...past.values()].sort(byName)];
+}
+// One group of name chips. The label only shows when there are both members and past players.
+function forChips(list, label, labeled) {
+  if (!list.length) return '';
+  const id = 'l-for-' + label.toLowerCase().replace(/\W+/g, '');
+  return `${labeled ? `<p class="muted small for-group" id="${id}">${label}</p>` : ''}<div class="chips" role="group" aria-labelledby="${labeled ? id : 'l-for'}">${list.map(n => `<button type="button" class="chip" data-a="lg-for-chip" data-name="${esc(n.name)}" aria-pressed="false">${esc(n.name)}</button>`).join('')}</div>`;
+}
+function openAddFor() {
+  lgDupOk = '';
+  const names = lgForNames();
+  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Add a result</h2><button class="link strong" data-a="lg-for-save">Save</button></div>
+  <div class="sheet-body"><form id="lgf" novalidate>
+    <p class="muted small" style="margin-top:0">For a player who forgot to add their own. It counts toward their standings, and you can edit or remove it later.</p>
+    <div class="field"><span id="l-for">Player</span>
+      ${forChips(names.filter(n => n.mem), 'Members', names.some(n => !n.mem))}${forChips(names.filter(n => !n.mem), 'Past players', names.some(n => n.mem))}
+      <input type="search" id="lg-for-name" aria-labelledby="l-for" placeholder="${names.length ? 'Or type a new name' : 'Their name'}" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24" enterkeyhint="next">
+    </div>
+    <label class="field"><span>Game night</span><input type="date" id="lg-date" value="${todayISO()}"></label>
+    <div class="two">
+      <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" placeholder="0.00"></div></label>
+      <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" placeholder="0.00"></div></label>
+    </div>
+    <p class="calc" id="lg-calc" aria-live="polite"></p>
+    <p class="err" id="lg-err" role="alert"></p>
+  </form></div>`, { backdropCloses: false });
+  lgCalc();
+}
+Object.assign(A, {
+  'lg-for-open': () => openAddFor(),
+  'lg-for-chip': t => { $('#lg-for-name').value = t.dataset.name; lgCalc(); },
+  'lg-for-save': () => {
+    if (!(LGD.league && LGD.league.createdBy === LGD.uid)) return lgFail('Only the organizer can add results for other players.');
+    const raw = $('#lg-for-name').value.trim().replace(/\s+/g, ' ');
+    const date = $('#lg-date').value, buyIn = parseMoney($('#lg-in').value), cashOut = parseMoney($('#lg-out').value);
+    if (!raw) return lgFail('Choose a player or type their name.');
+    if (key(raw) === key(S.league.player)) return lgFail('That’s your name in this league. Use Add my result for your own results.');
+    if (!isISO(date)) return lgFail('Enter the date of the game night.');
+    if (buyIn == null) return lgFail('Enter their total buy-in, including rebuys.');
+    if (cashOut == null) return lgFail('Enter how much they cashed out. Enter 0 if they lost it all.');
+    if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
+    const pick = lgForNames().find(x => key(x.name) === key(raw)), name = pick ? pick.name : raw;
+    const dk = date + '|' + key(name);
+    if (lgDupOk !== dk && LGD.results.some(r => r.date === date && key(pName(r)) === key(name))) { lgDupOk = dk; return lgFail(`${name} already has a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    const rec = { date, buyIn, cashOut, player: name, imported: true, added: true };
+    if (pick && pick.mem) rec.forUid = pick.mem.id;
+    const code = S.league.code;
+    lgDupOk = ''; closeSheet();
+    lgWrite(be => be.addResult(code, rec), `Added ${name}’s result to ${S.league.name}.`);
+  },
+});
 function openResult(id) {
   const r = LGD.results.find(x => x.id === id); if (!r) return;
   const mine = isMine(r), organizer = LGD.league && LGD.league.createdBy === LGD.uid, importedByMe = r.imported && r.uid === LGD.uid;
@@ -2448,8 +2517,9 @@ function openResult(id) {
     ${who.length ? `<p class="muted small rx-who">${who.join(', ')}</p>` : ''}
     ${gifs.length ? `<div class="gif-reacts">${gifs.map(x => `<figure class="gif-react${x.u === LGD.uid ? ' mine' : ''}">${gifImg(x.v, 'gif-full', 'GIF from ' + reactorName(x.u))}<figcaption>${esc(reactorName(x.u))}${x.u === LGD.uid ? ` <button class="link inline" data-a="lg-react" data-id="${esc(r.id)}" data-v="${esc(mineV)}">Remove</button>` : ''}</figcaption></figure>`).join('')}</div>` : ''}
     ${mine ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit my result</button></div>`
-      : importedByMe ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit this result</button><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You imported this result, so you can edit or remove it.</p>`
-      : organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You started this league, so you can remove results that were added by mistake.</p>` : ''}
+      : importedByMe ? `<div class="stack-btns"><button class="btn" data-a="lg-edit" data-id="${esc(r.id)}">Edit this result</button><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">${r.added ? `You added this result for ${esc(pName(r))}, so you can edit or remove it.` : 'You imported this result, so you can edit or remove it.'}</p>`
+      : organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this result</button></div><p class="muted small">You started this league, so you can remove results that were added by mistake.</p>`
+      : r.added ? `<p class="muted small">${esc(reactorName(r.uid))} added this result${r.forUid === LGD.uid ? ' for you' : ''}.</p>` : ''}
   </div>`);
 }
 function openPlayer(name) {
@@ -2539,7 +2609,10 @@ Object.assign(A, {
     if (buyIn == null) return lgFail('Enter your total buy-in, including rebuys.');
     if (cashOut == null) return lgFail('Enter how much you cashed out. Enter 0 if you lost it all.');
     if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
-    if (!lgEditing && lgDupOk !== date && LGD.results.some(r => isMine(r) && r.date === date)) { lgDupOk = date; return lgFail(`You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    if (!lgEditing && lgDupOk !== date) {
+      const dup = LGD.results.find(r => (isMine(r) || r.forUid === LGD.uid) && r.date === date);
+      if (dup) { lgDupOk = date; return lgFail(isMine(dup) ? `You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.` : `${reactorName(dup.uid)} already added a result for you on ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    }
     const also = !lgEditing && $('#lg-also') && $('#lg-also').checked;
     let stype = '';
     if (also) {
@@ -2550,7 +2623,8 @@ Object.assign(A, {
     if (!lgEditing) S.settings.alsoSession = !!also;
     const impEl = $('#lg-imp-player'), impName = impEl ? impEl.value.trim().replace(/\s+/g, ' ') : '';
     if (impEl && !impName) return lgFail('Enter the player’s name.');
-    const code = S.league.code, editing = lgEditing, rec = { date, buyIn, cashOut, player: impEl ? impName : S.league.player };
+    const code = S.league.code, editing = lgEditing, er = editing && LGD.results.find(x => x.id === editing), rec = { date, buyIn, cashOut };
+    if (impEl) rec.player = impName; else if (!er || isMine(er)) rec.player = S.league.player;   // a result added for a member keeps its player
     if (also) {
       S.sessions.push({ id: uid(), seq: ++S.seq, date, type: stype, buyIn, stack: cashOut });
       if (!S.league.type) S.league.type = stype;   // link the league to this session type
@@ -2806,13 +2880,13 @@ Object.assign(A, {
     } catch (e) { t.disabled = false; lgFail('The import stopped partway. Check your connection, then import the same file again. Results already added will be skipped.'); }
   },
   'lg-imp-clear': () => {
-    const n = LGD.results.filter(r => r.imported && r.uid === LGD.uid).length;
+    const n = LGD.results.filter(csvImportedByMe).length;
     openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Delete imported results</h2><span></span></div>
     <div class="sheet-body"><p>This deletes the ${n} result${n === 1 ? '' : 's'} you imported for other players, along with their reactions. Results people added themselves aren’t affected.</p>
     <div class="stack-btns"><button class="btn danger" data-a="lg-imp-clear-go">Delete ${n} imported results</button><button class="btn" data-a="close">Keep them</button></div></div>`);
   },
   'lg-imp-clear-go': async () => {
-    const ids = LGD.results.filter(r => r.imported && r.uid === LGD.uid).map(r => r.id);
+    const ids = LGD.results.filter(csvImportedByMe).map(r => r.id);
     try { const be = await lgBackend(); await be.deleteResults(S.league.code, ids); closeSheet(); toast(`Deleted ${ids.length} imported results.`); }
     catch (e) { toast('Couldn’t delete them. Check your connection and try again.'); }
   },
