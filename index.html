@@ -2200,7 +2200,12 @@ async function fbBackend() {
       b.delete(F.doc(db, 'leagues', code, 'gifs', id)); b.delete(F.doc(db, 'leagues', code, 'gifdata', id));
       await b.commit();
     },
-    async deleteLeague(code, resultIds, memberIds) {
+    async deleteLeague(code, name) {
+      // The rules only let members read a league's contents, so make sure the organizer is one,
+      // then list what's on the server rather than trusting what this phone has loaded.
+      await this.setMember(code, name);
+      const ids = async c => (await F.getDocs(F.collection(db, 'leagues', code, c))).docs.map(d => d.id);
+      const resultIds = await ids('results'), memberIds = (await ids('members')).filter(id => id !== user.uid).concat(user.uid);
       const gifIds = (await this.listGifs(code)).map(g => g.id);
       for (let i = 0; i < gifIds.length; i += 5) { const b = F.writeBatch(db); gifIds.slice(i, i + 5).forEach(id => { b.delete(F.doc(db, 'leagues', code, 'gifs', id)); b.delete(F.doc(db, 'leagues', code, 'gifdata', id)); }); await b.commit(); }
       await this.deleteResults(code, resultIds);
@@ -2337,7 +2342,7 @@ function leagueHTML() {
   let h = `<div class="lg-head"><div class="lg-title muted small">Playing as ${esc(lg.player)}<br>Code <b class="code">${esc(lg.code)}</b></div>
     <div class="lg-head-btns"><button class="btn" data-a="lg-share">Invite</button><button class="icon opts-btn" data-a="lg-opts" aria-label="League options"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button></div></div>`;
   if (LGD.ready && !LGD.league) return h + `<p class="warn">This league was deleted by its organizer, so its results are gone.</p><div class="stack-btns"><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
-  if (LGD.rejoin && !(LGD.ready && LGD.league)) return h + `<p class="warn">This phone isn’t signed in to ${esc(lg.name)} yet. That happens after restoring a backup or re-adding the app to your home screen.</p><div class="stack-btns"><button class="btn primary" data-a="lg-rejoin">Rejoin as ${esc(lg.player)}</button><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
+  if (LGD.rejoin) return h + `<p class="warn">This phone isn’t signed in to ${esc(lg.name)} yet. That happens after restoring a backup or re-adding the app to your home screen.</p><div class="stack-btns"><button class="btn primary" data-a="lg-rejoin">Rejoin as ${esc(lg.player)}</button><button class="btn" data-a="lg-forget">Remove it from this phone</button></div>`;
   if (LGD.error) h += `<p class="warn">${esc(LGD.error)}</p>`;
   if (!LGD.ready && !LGD.error) return h + `<p class="note">Loading the league…</p>`;
   const twin = LGD.members.find(m => m.id !== LGD.uid && key(m.name) === key(lg.player));
@@ -2734,9 +2739,13 @@ Object.assign(A, {
     lgFail('Deleting…');
     try {
       const be = await lgBackend();
-      await be.deleteLeague(lg.code, LGD.results.map(r => r.id), LGD.members.map(m => m.id));
+      await be.deleteLeague(lg.code, lg.player);
       S.league = null; save(); lgStart(); closeSheet(); renderLeague(); toast(`Deleted ${lg.name}.`);
-    } catch (e) { lgFail('Couldn’t delete the league. Check your connection and try again.'); }
+    } catch (e) {
+      lgFail(e && e.code === 'permission-denied'
+        ? 'Firebase didn’t allow the delete. Make sure the latest firestore.rules are published in the Firebase console, then try again.'
+        : 'Couldn’t delete the league. Check your connection and try again.');
+    }
   },
   // Add button: a menu, or straight back to a session in progress
   add: () => {
