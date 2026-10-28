@@ -220,8 +220,10 @@ svg .pill-t { fill: var(--paper); font-size: 11px; font-weight: 700; }
 .guide { stroke: var(--ink2); stroke-width: 1; stroke-dasharray: 3 3; }
 .hdot { fill: var(--card); stroke-width: 2.5; }
 .hsel { fill: var(--ink); fill-opacity: .05; }
-.vpip-line { stroke: var(--blue); } .pfr-line { stroke: var(--orange); }
-.vpip-f { fill: var(--blue); } .pfr-f { fill: var(--orange); } .vpip-s { stroke: var(--blue); }
+:root { --vpip: var(--ink); --pfr: var(--ink2); }
+.vpip-line { stroke: var(--vpip); } .pfr-line { stroke: var(--pfr); }
+.vpip-f { fill: var(--vpip); } .pfr-f { fill: var(--pfr); } .vpip-s { stroke: var(--vpip); }
+.pfr-line { stroke-dasharray: 6 4; }
 figure { background: var(--card); border: 1px solid var(--hair); border-radius: 16px; padding: 14px 12px 12px; }
 figure .readout { margin-top: 8px; }
 
@@ -267,9 +269,10 @@ tr.total td { border-top: 1px solid var(--hair); }
 .seg.four button { font-size: 14px; }
 .label { font-size: 15px; color: var(--ink2); margin: 0 0 8px; }
 .legend-row { font-size: 13.5px; color: var(--ink2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 4px; }
-.key { display: inline-block; width: 16px; height: 0; border-top: 3px solid var(--blue); border-radius: 2px; margin-left: 6px; }
+.key { display: inline-block; width: 16px; height: 0; border-top: 3px solid var(--vpip); border-radius: 2px; margin-left: 6px; }
 .key:first-child { margin-left: 0; }
-.key.k-pfr { border-color: var(--orange); }
+.key.k-pfr { border-color: var(--pfr); }
+.key.k-pfr { border-top-style: dashed; }
 
 .pos-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 6px; }
 .pos-head .label { margin: 0; }
@@ -880,7 +883,7 @@ function openSettings() {
 function applyTheme() {
   const t = S.settings.theme, r = document.documentElement;
   if (t === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', t);
-  paintTheme();
+  paintTheme(); document.documentElement.toggleAttribute('data-cb', !!S.settings.cb);
   const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches), th = themeById(S.settings.palette);
   document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', dark ? th.dark.paper : th.light.paper));
 }
@@ -1737,7 +1740,11 @@ function drawTrend(fig, ses) {
   const pp = pts.map(p => ({ t: p.t, v: p.p }));
   const end = (arr, cls) => { const p = arr[arr.length - 1]; return `<circle class="end-dot ${cls}" cx="${f1(F.x(p.t))}" cy="${f1(F.y(p.v))}" r="4"/>`; };
   const dots = (arr, cls) => arr.length <= 60 ? arr.map(p => `<circle class="${cls}" cx="${f1(F.x(p.t))}" cy="${f1(F.y(p.v))}" r="2.2"/>`).join('') : '';
-  el.innerHTML = svgWrap(F.W, F.H, F.under + `<path class="ln vpip-line" d="${linePath(pts, F.x, F.y)}"/>${dots(pts, 'vpip-f')}<path class="ln pfr-line" d="${linePath(pp, F.x, F.y)}"/>${dots(pp, 'pfr-f')}${end(pts, 'vpip-f')}${end(pp, 'pfr-f')}` + F.axes, 'Played and raised percentages by session');
+  // light shading under Played: raised hands sit inside it, and the band between the lines is roughly your calls
+  const gid = 'g' + (++gradSeq), y0 = f1(F.y(0));
+  const area = `M${f1(F.x(pts[0].t))},${y0}` + pts.map(p => `L${f1(F.x(p.t))},${f1(F.y(p.v))}`).join('') + `L${f1(F.x(pts[pts.length - 1].t))},${y0}Z`;
+  const defs = `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${F.m.t}" y2="${y0}">${stop(0, '--vpip', 0.16)}${stop(1, '--vpip', 0.02)}</linearGradient>`;
+  el.innerHTML = svgWrap(F.W, F.H, F.under + `<path d="${area}" fill="url(#${gid})"/><path class="ln vpip-line" d="${linePath(pts, F.x, F.y)}"/>${dots(pts, 'vpip-f')}<path class="ln pfr-line" d="${linePath(pp, F.x, F.y)}"/>${dots(pp, 'pfr-f')}${end(pts, 'vpip-f')}${end(pp, 'pfr-f')}` + F.axes, 'Played and raised percentages by session', defs);
   inspectTime(fig, pts, F, p => `<b>${fmtDate(p.s.date)}</b>, ${esc(p.s.type)}<br>Played ${pct(p.v / 100, 0)}, bet/raised ${pct(p.p / 100, 0)} of ${p.n} hands`, () => 'vpip-s');
 }
 function handsCSV() {
