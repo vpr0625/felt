@@ -2813,10 +2813,10 @@ document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#
 /* ---------------- chips ---------------- */
 // [key, name, chip color, color of the edge spots]
 const CHIP_COLORS = [
-  ['white', 'White', '#f3efe4', '#9a9384'], ['red', 'Red', '#c0392b', '#f6e7e4'], ['blue', 'Blue', '#2563c9', '#e3ecfa'],
+  ['white', 'White', '#f3efe4', '#7fb6e3'], ['red', 'Red', '#c0392b', '#f6e7e4'], ['blue', 'Blue', '#2563c9', '#e3ecfa'],
   ['green', 'Green', '#1f8a4c', '#e2f2e8'], ['black', 'Black', '#1d1d1b', '#d9d6cf'], ['purple', 'Purple', '#7442c8', '#ece4f8'],
-  ['yellow', 'Yellow', '#e9b61c', '#7a5a00'], ['orange', 'Orange', '#e5731c', '#fbe9dc'], ['pink', 'Pink', '#e05596', '#fbe5ef'],
-  ['gray', 'Gray', '#8a8f98', '#eef0f2'], ['brown', 'Brown', '#7d5232', '#f1e6dc'], ['teal', 'Teal', '#138a80', '#dff3f1'],
+  ['maroon', 'Maroon', '#7a1f2b', '#f2c230'], ['orange', 'Orange', '#e5731c', '#fbe9dc'], ['pink', 'Pink', '#e05596', '#b9edb5'],
+  ['gray', 'Gray', '#8a8f98', '#eef0f2'], ['brown', 'Brown', '#7d5232', '#5a9be6'], ['teal', 'Teal', '#138a80', '#dff3f1'],
 ];
 const chipColor = k => CHIP_COLORS.find(c => c[0] === k) || CHIP_COLORS[0];
 const chipSw = k => { const c = chipColor(k); return `<span class="chip-sw" style="--c:${c[2]};--d:${c[3]}" aria-hidden="true"></span>`; };
