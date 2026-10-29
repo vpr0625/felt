@@ -142,6 +142,25 @@ input { min-width: 0; max-width: 100%; }
 .stepper input { border: 0 !important; border-radius: 0 !important; text-align: center; padding: 8px 0 !important; min-height: 44px; background: transparent !important; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .for-group { margin: 2px 0 6px; }
+/* poker chips: a colored disc with the dashed edge spots of a real chip */
+.chip-sw { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--c); border: 3px dashed var(--d); box-shadow: 0 0 0 1px var(--fieldline); box-sizing: border-box; }
+.cc { margin: -4px 0 12px; }
+.cc-open { font-weight: 600; padding: 6px 0; display: inline-flex; align-items: center; gap: 8px; }
+.cc-open .chip-sw { width: 20px; height: 20px; border-width: 2px; }
+.cc-body { border: 1px solid var(--fieldline); border-radius: 14px; background: var(--field); padding: 4px 12px 12px; margin-top: 6px; }
+.cc-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; }
+.cc-row + .cc-row { border-top: 1px solid var(--fieldline); }
+.cc-label { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cc-label > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.cc-step { width: 136px; flex: none; grid-template-columns: 42px 1fr 42px; background: var(--sheet); }
+.cc-total { margin: 10px 0 0; }
+.ce-row { display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 1fr) 40px; gap: 10px; align-items: center; margin-bottom: 10px; }
+.ce-del { border: 0; background: none; font-size: 24px; line-height: 1; color: var(--ink2); min-height: 44px; border-radius: 10px; }
+.ce-del:active { background: var(--press); }
+.chip-list { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--fieldline); border-radius: 14px; background: var(--field); padding: 0 14px; }
+.chip-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.chip-list > div + div { border-top: 1px solid var(--fieldline); }
+.chip-list > div > span { display: flex; align-items: center; gap: 10px; }
 .chip { border: 1px solid var(--fieldline); background: transparent; border-radius: 999px; padding: 6px 13px; font-size: 15px; min-height: 36px; }
 .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .hint { margin: -8px 0 14px; }
@@ -574,7 +593,10 @@ function ingest(d) {
         .map(x => ({ id: typeof x.id === 'string' ? x.id : uid(), kind: x.kind, c: x.c, date: x.date, note: typeof x.note === 'string' ? x.note.slice(0, 80) : '', at: Number.isFinite(x.at) ? x.at : 0, sample: x.sample === true })),
     };
     const okL = lg => lg && /^[A-Z0-9]{6}$/.test(lg.code) && typeof lg.player === 'string' && lg.player.trim();
-    const cleanL = lg => { const o = { code: lg.code, name: String(lg.name || 'League').slice(0, 32), player: lg.player.slice(0, 24) }; if (typeof lg.type === 'string' && lg.type) o.type = lg.type.slice(0, 60); return o; };
+    const cleanL = lg => { const o = { code: lg.code, name: String(lg.name || 'League').slice(0, 32), player: lg.player.slice(0, 24) }; if (typeof lg.type === 'string' && lg.type) o.type = lg.type.slice(0, 60);
+  // the league's chips, kept so sessions can count chips even before the league loads
+  if (Array.isArray(lg.chips)) { const ch = lg.chips.filter(x => x && typeof x.c === 'string' && x.c.length <= 12 && Number.isInteger(x.v) && x.v > 0 && x.v <= 10000000).slice(0, 12).map(x => ({ c: x.c, v: x.v })); if (ch.length) o.chips = ch; }
+  return o; };
     const list = Array.isArray(d.leagues) ? d.leagues : d.league ? [d.league] : [];   // older saves had a single league
     S.leagues = list.filter(okL).map(cleanL).filter((l, i, a) => a.findIndex(x => x.code === l.code) === i);
     S.leagueCur = S.leagues.some(l => l.code === d.leagueCur) ? d.leagueCur : (S.leagues[0] ? S.leagues[0].code : '');
@@ -792,6 +814,7 @@ function openSessionForm(id, fromLive = false) {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="f-buyin" inputmode="decimal" value="${v.buyIn}" placeholder="0.00" enterkeyhint="next"></div></label>
       <label class="field"><span>Ending stack</span><div class="money"><i>$</i><input type="text" id="f-stack" inputmode="decimal" value="${v.stack}" placeholder="0.00" enterkeyhint="done"></div></label>
     </div>
+    <div id="f-cc">${chipCalcHTML(chipsForType(v.type), '#f-stack', 'my')}</div>
     <p class="hint muted small">${L ? (L.buyIns.length ? 'This is the total of the buy-ins you logged. Change it if you missed one.' : 'You didn’t log any buy-ins, so enter your total here.') : 'Add up every buy-in and rebuy from the session.'}</p>
     ${nh ? `<p class="muted small">${nh} hand${nh === 1 ? '' : 's'} ${L ? 'will be saved with this session' : 'were recorded during this session'}.</p>` : ''}
     <label class="field"><span>Notes (optional)</span><textarea id="f-notes" rows="3" maxlength="2000" placeholder="Table dynamics, how you played, anything to remember">${esc(v.notes)}</textarea></label>
@@ -1445,7 +1468,7 @@ document.addEventListener('keydown', e => {
 });
 let notesT = null;
 document.addEventListener('input', e => {
-  if (e.target.id === 'f-type') pickLeagueFor(e.target.value);
+  if (e.target.id === 'f-type') { pickLeagueFor(e.target.value); ccRetarget(e.target.value); }
   if (e.target.id === 'lf-q') { listQ = e.target.value; $('#list-body').innerHTML = listBody(); }
   if (e.target.id === 'live-notes' && S.live) { S.live.notes = e.target.value.slice(0, 2000); clearTimeout(notesT); notesT = setTimeout(save, 400); }
   if (e.target.closest && e.target.closest('#sf')) updateForm();
@@ -2138,12 +2161,20 @@ const lgConfigured = () => !!(window.__feltMockLeague || (window.FELT_FIREBASE &
 let LGD = { league: null, members: [], results: [], ready: false, error: '' }, lgUnsubs = [], lgView = 'standings';
 
 // Firebase connection, loaded only when the league is used.
-let fbConn = null;
-async function fbBackend() {
-  if (fbConn) return fbConn;
+let fbConn = null, fbBoot = null;
+// One startup at a time. If it fails, the next try starts over instead of repeating the failure.
+function fbBackend() {
+  if (fbConn) return Promise.resolve(fbConn);
+  if (!fbBoot) fbBoot = fbStart().catch(e => { fbBoot = null; throw e; });
+  return fbBoot;
+}
+async function fbStart() {
   const base = `https://www.gstatic.com/firebasejs/${FB_VERSION}/`;
-  const [appM, authM, F] = await Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-firestore.js')]);
-  const app = appM.initializeApp(window.FELT_FIREBASE);
+  let appM, authM, F;
+  try { [appM, authM, F] = await Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-firestore.js')]); }
+  catch (e) { const err = new Error('Felt couldn’t load Firebase.'); err.code = 'felt/load-failed'; throw err; }
+  // a first try that got partway already set up the app, so reuse it rather than setting it up twice
+  const app = appM.getApps && appM.getApps().length ? appM.getApp() : appM.initializeApp(window.FELT_FIREBASE);
   let db;
   try { db = F.initializeFirestore(app, { localCache: F.persistentLocalCache() }); } catch (e) { db = F.getFirestore(app); }
   const auth = authM.getAuth(app);
@@ -2151,11 +2182,14 @@ async function fbBackend() {
     const off = authM.onAuthStateChanged(auth, u => { if (u) { off(); res(u); } });
     if (!auth.currentUser) authM.signInAnonymously(auth).catch(e => { off(); rej(e); });
   });
+  // Right after startup, Firestore can briefly report it's offline while it connects, so wait and try again.
+  const settle = async fn => { for (let i = 0; ; i++) { try { return await fn(); } catch (e) { if (i >= 2 || !(e && e.code === 'unavailable')) throw e; await new Promise(r => setTimeout(r, 1200 * (i + 1))); } } };
   const L = code => F.doc(db, 'leagues', code);
   fbConn = {
     uid: user.uid,
-    async getLeague(code) { const d = await F.getDoc(L(code)); return d.exists() ? { code, ...d.data() } : null; },
+    async getLeague(code) { const d = await settle(() => F.getDoc(L(code))); return d.exists() ? { code, ...d.data() } : null; },
     async setSeasons(code, seasons) { await F.updateDoc(L(code), { seasons }); },
+    async setChips(code, chips) { await F.updateDoc(L(code), { chips }); },
     async createLeague(code, name) { await F.setDoc(L(code), { name, createdBy: user.uid, createdAt: F.serverTimestamp() }); },
     async setMember(code, name) { await F.setDoc(F.doc(db, 'leagues', code, 'members', user.uid), { name, joinedAt: F.serverTimestamp() }, { merge: true }); },
     async setClaims(code, claims, uid) { await F.updateDoc(F.doc(db, 'leagues', code, 'members', uid || user.uid), { claims }); },
@@ -2225,6 +2259,16 @@ async function fbBackend() {
   return fbConn;
 }
 const lgBackend = () => window.__feltMockLeague ? Promise.resolve(window.__feltMockLeague) : fbBackend();
+// Turn a Firebase error into something useful. `what` finishes "Couldn't …", e.g. "join right now".
+function lgErr(e, what) {
+  const c = (e && e.code) || '', tail = c ? ` (${c})` : '';
+  if (c === 'felt/load-failed') return `Felt couldn’t load its league tools. If you use an ad or content blocker, allow Felt or turn it off for this site. Then close Felt completely and open it again.${tail}`;
+  if (c === 'auth/web-storage-unsupported' || c === 'auth/operation-not-supported-in-this-environment') return `Felt couldn’t sign in because this browser is blocking website storage. Turn off Private Browsing, or open Felt from your home screen.${tail}`;
+  if (c === 'auth/operation-not-allowed' || c === 'auth/admin-restricted-operation') return `Firebase isn’t letting new players sign in. Ask the organizer to check that Anonymous sign-in is turned on in Firebase.${tail}`;
+  if (c === 'auth/too-many-requests' || c === 'resource-exhausted') return `Firebase is busy right now. Wait a minute and try again.${tail}`;
+  if (c === 'permission-denied') return `Firebase didn’t allow that. Ask the organizer to check that the latest firestore.rules are published.${tail}`;
+  return `Couldn’t ${what}. Check your connection, then try again. If it keeps happening, send the organizer a screenshot of this message.${tail}`;
+}
 
 function lgStart() {
   lgUnsubs.forEach(f => f()); lgUnsubs = [];
@@ -2236,9 +2280,10 @@ function lgStart() {
       LGD[kind] = val; LGD.ready = true; LGD.error = ''; LGD['got_' + kind] = true;
       if (lgClaimAsk && LGD.got_members && LGD.got_results && LGD.members.some(m => m.id === LGD.uid)) { lgClaimAsk = false; if (unclaimedNames().length && $('#backdrop').hidden && tab === 'league') setTimeout(() => openClaim(true), 0); }
       if (kind === 'league' && val && val.name !== S.league.name) { S.league.name = val.name; save(); }
+      if (kind === 'league' && val && JSON.stringify(cleanChips(val.chips)) !== JSON.stringify(S.league.chips || [])) { S.league.chips = cleanChips(val.chips); save(); }
       if (tab === 'league' && $('#backdrop').hidden) renderLeague();
     }, err => { if (err && err.code === 'permission-denied') LGD.rejoin = true; else LGD.error = 'Couldn’t reach the league. Check your connection.'; if (tab === 'league') renderLeague(); }));
-  }).catch(() => { LGD.error = 'Couldn’t connect to the league. Check your connection and try again.'; if (tab === 'league') renderLeague(); });
+  }).catch(e => { LGD.error = lgErr(e, 'connect to the league'); if (tab === 'league') renderLeague(); });
 }
 const lgNet = r => r.cashOut - r.buyIn;
 const lgSeasons = () => (LGD.league && Array.isArray(LGD.league.seasons) ? LGD.league.seasons : [])
@@ -2404,6 +2449,7 @@ function openLeagueOptions() {
     <p class="muted small" style="margin-top:-8px">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
     <div class="opt-list">
       ${org || lgSeasons().length ? row('lg-seasons', 'Seasons', lgSeasons().length ? `${lgSeasons().length} season${lgSeasons().length === 1 ? '' : 's'}` : 'Group results into seasons') : ''}
+      ${org || lgChips().length ? row('lg-chips', 'Chips', lgChips().length ? chipSummary(lgChips()) : 'Set your chip colors and values') : ''}
       ${row('lg-pack', 'League GIFs', 'Upload GIFs everyone can react with')}
     </div>
     ${org ? `<h3>Organizer</h3><div class="opt-list">
@@ -2457,6 +2503,7 @@ function openResultForm(r) {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" value="${v.buyIn}" placeholder="0.00"></div></label>
       <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" value="${v.out}" placeholder="0.00"></div></label>
     </div>
+    ${chipCalcHTML(lgChips(), '#lg-out', r && !isMine(r) ? 'their' : 'my')}
     <p class="calc" id="lg-calc" aria-live="polite"></p>
     ${r ? '' : `<label class="switch also-sess"><input type="checkbox" id="lg-also"${S.settings.alsoSession ? ' checked' : ''}><span><b>Also save as a session</b><br><span class="muted small">Adds it to your own sessions and stats too.</span></span></label>
     <div id="lg-also-box"${S.settings.alsoSession ? '' : ' hidden'}><label class="field"><span>Session type</span><input type="search" id="lg-also-type" value="${esc(S.league.type || S.league.name)}" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" enterkeyhint="done"></label>
@@ -2510,6 +2557,7 @@ function openAddFor() {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" placeholder="0.00"></div></label>
       <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" placeholder="0.00"></div></label>
     </div>
+    ${chipCalcHTML(lgChips(), '#lg-out', 'their')}
     <p class="calc" id="lg-calc" aria-live="polite"></p>
     <p class="err" id="lg-err" role="alert"></p>
   </form></div>`, { backdropCloses: false });
@@ -2603,7 +2651,7 @@ Object.assign(A, {
       if (!lg) return lgFail('There’s no league with that code. Check it and try again.');
       if (S.leagues.some(l => l.code === code)) { S.leagueCur = code; lgOpen = true; save(); closeSheet(); lgStart(); renderLeague(); toast(`You’re already in ${lg.name}.`); return; }
       pendingLeague = lg; openJoin('name');
-    } catch (e) { lgFail('Couldn’t reach the league. Check your connection and try again.'); }
+    } catch (e) { lgFail(lgErr(e, 'reach the league')); }
   },
   'lg-join-do': async () => {
     const name = $('#lg-who').value.trim().replace(/\s+/g, ' ');
@@ -2612,7 +2660,7 @@ Object.assign(A, {
       const be = await lgBackend(); await be.setMember(pendingLeague.code, name);
       S.league = { code: pendingLeague.code, name: pendingLeague.name, player: name }; S.settings.playerName = name; save();
       lgClaimAsk = true; closeSheet(); lgStart(); renderLeague(); toast(`You joined ${pendingLeague.name}.`); pendingLeague = null;
-    } catch (e) { lgFail('Couldn’t join right now. Check your connection and try again.'); }
+    } catch (e) { lgFail(lgErr(e, 'join right now')); }
   },
   'lg-create-do': async () => {
     const lname = $('#lg-title-in').value.trim().replace(/\s+/g, ' '), name = $('#lg-who').value.trim().replace(/\s+/g, ' ');
@@ -2626,7 +2674,7 @@ Object.assign(A, {
       await be.createLeague(code, lname); await be.setMember(code, name);
       S.league = { code, name: lname, player: name }; S.settings.playerName = name; save();
       closeSheet(); lgStart(); renderLeague(); toast(`${lname} is ready. Tap Invite to share the code with your friends.`);
-    } catch (e) { lgFail('Couldn’t start the league. Check your connection and try again.'); }
+    } catch (e) { lgFail(lgErr(e, 'start the league')); }
   },
   'lg-share': async () => {
     const lg = S.league; if (!lg) return;
@@ -2761,6 +2809,121 @@ Object.assign(A, {
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
 document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#lg-also-box').hidden = !e.target.checked; lgCalc(); } else if (e.target.id === 'lg-date' && $('#lgf')) lgCalc(); });
+
+/* ---------------- chips ---------------- */
+// [key, name, chip color, color of the edge spots]
+const CHIP_COLORS = [
+  ['white', 'White', '#f3efe4', '#9a9384'], ['red', 'Red', '#c0392b', '#f6e7e4'], ['blue', 'Blue', '#2563c9', '#e3ecfa'],
+  ['green', 'Green', '#1f8a4c', '#e2f2e8'], ['black', 'Black', '#1d1d1b', '#d9d6cf'], ['purple', 'Purple', '#7442c8', '#ece4f8'],
+  ['yellow', 'Yellow', '#e9b61c', '#7a5a00'], ['orange', 'Orange', '#e5731c', '#fbe9dc'], ['pink', 'Pink', '#e05596', '#fbe5ef'],
+  ['gray', 'Gray', '#8a8f98', '#eef0f2'], ['brown', 'Brown', '#7d5232', '#f1e6dc'], ['teal', 'Teal', '#138a80', '#dff3f1'],
+];
+const chipColor = k => CHIP_COLORS.find(c => c[0] === k) || CHIP_COLORS[0];
+const chipSw = k => { const c = chipColor(k); return `<span class="chip-sw" style="--c:${c[2]};--d:${c[3]}" aria-hidden="true"></span>`; };
+// chips are {c: color key, v: value in cents}, smallest first
+const cleanChips = list => (Array.isArray(list) ? list : []).filter(x => x && CHIP_COLORS.some(c => c[0] === x.c) && Number.isInteger(x.v) && x.v > 0 && x.v <= MAX_C).sort((a, b) => a.v - b.v).slice(0, 12);
+const lgChips = () => cleanChips(LGD.league && 'chips' in LGD.league ? LGD.league.chips : S.league && S.league.chips);
+const chipSummary = list => `${list.length} chip${list.length === 1 ? '' : 's'}, ${list.length === 1 ? usdC(list[0].v) : `${usdC(list[0].v)} to ${usdC(list[list.length - 1].v)}`}`;
+// For a session: the chips of the league linked to its session type (or the open league, if it isn't linked to a type yet).
+function chipsForType(type) {
+  const k = key(type || ''), hit = k && S.leagues.find(l => l.type && key(l.type) === k && cleanChips(l.chips).length);
+  if (hit) return cleanChips(hit.chips);
+  // a league that isn't linked to any session type yet: offer its chips for any session
+  if (S.league && !S.league.type && cleanChips(S.league.chips).length) return cleanChips(S.league.chips);
+  return [];
+}
+
+// The chip calculator: count each color, and the total fills in the cash-out or ending stack.
+function chipCalcHTML(chips, target, who = 'my') {
+  if (!chips.length) return '';
+  return `<div class="cc" data-target="${target}" data-who="${who}" data-sig="${esc(JSON.stringify(chips))}">
+    <button type="button" class="link cc-open" data-a="cc-toggle" aria-expanded="false">${chipSw(chips[0].c)}Count ${who === 'their' ? 'their' : 'my'} chips</button>
+    <div class="cc-body" hidden>
+      ${chips.map((c, i) => { const nm = chipColor(c.c)[1]; return `<div class="cc-row"><span class="cc-label">${chipSw(c.c)}<span><b>${nm}</b><span class="muted small">${usdC(c.v)} each</span></span></span>
+        <div class="stepper cc-step"><button type="button" data-a="cc-step" data-d="-1" aria-label="One fewer ${nm} chip">−</button><input type="text" class="cc-n" inputmode="numeric" maxlength="4" data-v="${c.v}" placeholder="0" aria-label="Number of ${nm} chips"><button type="button" data-a="cc-step" data-d="1" aria-label="One more ${nm} chip">+</button></div></div>`; }).join('')}
+      <p class="cc-total" aria-live="polite"></p>
+    </div></div>`;
+}
+function ccUpdate(box, write = true) {
+  let tot = 0, any = false;
+  box.querySelectorAll('.cc-n').forEach(inp => { const n = parseInt(inp.value, 10); if (n > 0) { any = true; tot += n * Number(inp.dataset.v); } });
+  const their = box.dataset.who === 'their';
+  box.querySelector('.cc-total').innerHTML = any ? `${their ? 'Their' : 'Your'} chips add up to <b>${usdC(tot)}</b>, so that’s ${their ? 'their' : 'your'} ${box.dataset.target === '#f-stack' ? 'ending stack' : 'cash-out'}.` : `<span class="muted">Enter how many of each chip ${their ? 'they have' : 'you have'}.</span>`;
+  if (!write || !any) return;
+  const t = $(box.dataset.target); if (!t) return;
+  t.value = (tot / 100).toFixed(2); t.dispatchEvent(new Event('input', { bubbles: true }));
+}
+// In the session form, switch to the chips of the league that matches the session type, if nothing's been counted yet.
+function ccRetarget(type) {
+  const wrap = $('#f-cc'); if (!wrap) return;
+  const box = wrap.querySelector('.cc'), chips = chipsForType(type);
+  if (box && [...box.querySelectorAll('.cc-n')].some(i => i.value)) return;
+  if ((box ? box.dataset.sig : '') !== (chips.length ? JSON.stringify(chips) : '')) wrap.innerHTML = chipCalcHTML(chips, '#f-stack', 'my');
+}
+document.addEventListener('input', e => {
+  if (!e.target.classList || !e.target.classList.contains('cc-n')) return;
+  const v = e.target.value.replace(/\D/g, '').slice(0, 4); if (v !== e.target.value) e.target.value = v;
+  ccUpdate(e.target.closest('.cc'));
+});
+
+function openChips() {
+  const org = LGD.league && LGD.league.createdBy === LGD.uid, list = lgChips();
+  if (!org) return openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Chips</h2><button class="link strong" data-a="close">Done</button></div>
+    <div class="sheet-body"><p class="muted small" style="margin-top:0">The chips ${esc(S.league.name)} plays with. When you add a result, tap Count my chips and Felt works out your cash-out.</p>
+    <div class="chip-list">${list.map(c => `<div><span>${chipSw(c.c)}<b>${chipColor(c.c)[1]}</b></span><span>${usdC(c.v)}</span></div>`).join('')}</div></div>`);
+  const rows = list.length ? list : [{ c: 'white', v: null }];
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Chips</h2><button class="link strong" data-a="ce-save">Save</button></div>
+  <div class="sheet-body"><form id="cef" novalidate>
+    <p class="muted small" style="margin-top:0">Set the chips your league plays with. Then anyone adding a result can count their chips, and Felt works out the total.</p>
+    <div class="ce-head muted small" style="display:grid;grid-template-columns:26px minmax(0,1.2fr) minmax(0,1fr) 40px;gap:10px;margin-bottom:6px"><span></span><span>Color</span><span>Value</span><span></span></div>
+    <div id="ce-rows">${rows.map(ceRowHTML).join('')}</div>
+    <div class="stack-btns" id="ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ce-add">Add a chip</button></div>
+    <p class="err" id="lg-err" role="alert"></p>
+  </form></div>`, { backdropCloses: false });
+}
+const ceRowHTML = x => `<div class="ce-row">${chipSw(x.c)}<div class="select"><select class="ce-color" aria-label="Chip color">${CHIP_COLORS.map(c => `<option value="${c[0]}"${c[0] === x.c ? ' selected' : ''}>${c[1]}</option>`).join('')}</select></div><div class="money"><i>$</i><input type="text" class="ce-v" inputmode="decimal" value="${x.v ? (x.v / 100).toFixed(2) : ''}" placeholder="0.25" aria-label="Chip value"></div><button type="button" class="ce-del" data-a="ce-del" aria-label="Remove this chip">×</button></div>`;
+document.addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('ce-color')) { const row = e.target.closest('.ce-row'); row.querySelector('.chip-sw').outerHTML = chipSw(e.target.value); lgFail(''); }
+});
+document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#cef')) lgFail(''); });
+Object.assign(A, {
+  'lg-chips': () => openChips(),
+  'cc-toggle': t => {
+    const box = t.closest('.cc'), body = box.querySelector('.cc-body'), open = body.hidden;
+    body.hidden = !open; t.setAttribute('aria-expanded', String(open));
+    if (open) ccUpdate(box, false);
+  },
+  'cc-step': t => {
+    const inp = t.parentElement.querySelector('.cc-n'), n = Math.max(0, Math.min(9999, (parseInt(inp.value, 10) || 0) + Number(t.dataset.d)));
+    inp.value = n ? String(n) : ''; ccUpdate(t.closest('.cc'));
+  },
+  'ce-add': () => {
+    const used = [...document.querySelectorAll('.ce-color')].map(s => s.value), next = CHIP_COLORS.find(c => !used.includes(c[0]));
+    if (!next) return;
+    $('#ce-rows').insertAdjacentHTML('beforeend', ceRowHTML({ c: next[0], v: null }));
+    if (used.length + 1 >= CHIP_COLORS.length) $('#ce-add-wrap').hidden = true;
+    const rows = document.querySelectorAll('.ce-row'); rows[rows.length - 1].querySelector('.ce-v').focus();
+  },
+  'ce-del': t => { t.closest('.ce-row').remove(); $('#ce-add-wrap').hidden = false; lgFail(''); },
+  'ce-save': async () => {
+    const list = [], seen = new Set();
+    for (const row of document.querySelectorAll('.ce-row')) {
+      const c = row.querySelector('.ce-color').value, raw = row.querySelector('.ce-v').value.trim(), nm = chipColor(c)[1];
+      if (!raw) return lgFail(`Enter a value for the ${nm} chip, or remove it.`);
+      const v = parseMoney(raw);
+      if (v == null || v <= 0) return lgFail(`Enter a value for the ${nm} chip, like 0.25 or 5.`);
+      if (v > MAX_C) return lgFail('Chip values over $100,000 aren’t supported.');
+      if (seen.has(c)) return lgFail(`You have two ${nm} chips. Pick a different color for one of them.`);
+      seen.add(c); list.push({ c, v });
+    }
+    const chips = cleanChips(list), code = S.league.code;
+    try {
+      const be = await lgBackend(); await be.setChips(code, chips);
+      if (LGD.league) LGD.league.chips = chips; S.league.chips = chips; save();
+      closeSheet(); renderLeague(); toast(chips.length ? 'Saved your league’s chips.' : 'Removed your league’s chips.');
+    } catch (e) { lgFail(lgErr(e, 'save the chips')); }
+  },
+});
 
 /* ---------------- seasons (organizer) ---------------- */
 const seasonCount = x => LGD.results.filter(r => inSeason(r.date, x)).length;
