@@ -143,6 +143,13 @@ input { min-width: 0; max-width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .for-group { margin: 2px 0 6px; }
 /* poker chips: a colored disc with the dashed edge spots of a real chip */
+/* save a chart as an image */
+.fig-actions { display: flex; justify-content: flex-end; margin: -2px 2px 2px; }
+.fig-save { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink2); padding: 6px 2px; min-height: 32px; }
+.fig-save svg { width: 16px; height: 16px; flex: none; }
+.fig-head .fig-save { margin-left: auto; padding: 0 2px; min-height: 0; align-self: center; }
+a.btn { text-decoration: none; display: flex; align-items: center; justify-content: center; }
+.chart-shot { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--fieldline); -webkit-touch-callout: default; -webkit-user-select: auto; user-select: auto; }
 .chip-sw { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--c); border: 3px dashed var(--d); box-shadow: 0 0 0 1px var(--fieldline); box-sizing: border-box; }
 .cc { margin: -4px 0 12px; }
 .cc-open { font-weight: 600; padding: 6px 0; display: inline-flex; align-items: center; gap: 8px; }
@@ -2809,6 +2816,183 @@ Object.assign(A, {
 });
 document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#lgf')) lgCalc(); });
 document.addEventListener('change', e => { if (e.target.id === 'lg-also') { $('#lg-also-box').hidden = !e.target.checked; lgCalc(); } else if (e.target.id === 'lg-date' && $('#lgf')) lgCalc(); });
+
+/* ---------------- save a chart as an image ---------------- */
+// Every drawn chart gets a Save image button. The picture is the chart itself plus its title,
+// what it shows (filters, season, highlighted player), any legend, and a small Felt label.
+const SAVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/></svg>';
+const chartTitle = fig => { const el = fig.querySelector('.fig-label') || (fig.closest('section') && fig.closest('section').querySelector('h2')); return el ? el.textContent.trim() : 'Chart'; };
+function addChartSaves() {
+  document.querySelectorAll('figure').forEach(fig => {
+    if (!fig.querySelector(':scope > .chart > svg') || fig.querySelector('.fig-save')) return;
+    const btn = `<button type="button" class="link fig-save" data-a="chart-save" aria-label="Save ${esc(chartTitle(fig))} as an image">${SAVE_ICON}<span>Save image</span></button>`;
+    const head = fig.querySelector(':scope > .fig-head');
+    if (head) { head.insertAdjacentHTML('beforeend', btn); return; }
+    const after = fig.querySelector(':scope > .readout') || fig.querySelector(':scope > .chart');
+    after.insertAdjacentHTML('afterend', `<div class="fig-actions">${btn}</div>`);
+  });
+}
+let saveScan = false;
+new MutationObserver(() => { if (saveScan) return; saveScan = true; requestAnimationFrame(() => { saveScan = false; addChartSaves(); }); })
+  .observe(document.body, { childList: true, subtree: true });
+
+function chartSubtitle(fig) {
+  if (fig.id && fig.id.startsWith('lg-')) {
+    const cs = curSeason(); let t = `${S.league.name}, ${cs ? cs.name : 'all time'}`;
+    if (fig.id === 'lg-lines' && lgHL) { const p = lgPlayers().find(x => x.k === lgHL); if (p) t += `. Highlighting ${p.name}`; }
+    return t;
+  }
+  if (fig.id === 'br-chart') return `Bankroll since ${fmtDate(BR().date)}`;
+  if (fig.id === 'home-cum') return `All ${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'}`;
+  const f = S.settings.filters, n = filtered().length, parts = [f.type || 'All session types'];
+  if (f.start && f.end) parts.push(`${fmtDate(f.start)} to ${fmtDate(f.end)}`);
+  else if (f.start) parts.push(`from ${fmtDate(f.start)}`);
+  else if (f.end) parts.push(`through ${fmtDate(f.end)}`);
+  return `${parts.join(', ')}. ${n} session${n === 1 ? '' : 's'}`;
+}
+const SVG_PROPS = ['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin',
+  'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'letter-spacing', 'text-anchor', 'dominant-baseline', 'stop-color', 'stop-opacity', 'display', 'visibility', 'paint-order'];
+let fontFaceCSS = null;
+function chartFonts() {
+  if (fontFaceCSS != null) return fontFaceCSS;
+  fontFaceCSS = '';
+  for (const sh of document.styleSheets) { try { for (const r of sh.cssRules) if (r.type === CSSRule.FONT_FACE_RULE) fontFaceCSS += r.cssText; } catch (e) { } }
+  return fontFaceCSS;
+}
+// Copy the chart with its colors written out, since a picture can't see the app's styles.
+async function chartImage(svg) {
+  const vb = svg.viewBox.baseVal;
+  let x0 = vb.x, y0 = vb.y, x1 = vb.x + vb.width, y1 = vb.y + vb.height;
+  try { const b = svg.getBBox(); x0 = Math.min(x0, b.x - 2); y0 = Math.min(y0, b.y - 2); x1 = Math.max(x1, b.x + b.width + 2); y1 = Math.max(y1, b.y + b.height + 2); } catch (e) { }
+  const clone = svg.cloneNode(true), src = [svg, ...svg.querySelectorAll('*')], dst = [clone, ...clone.querySelectorAll('*')];
+  src.forEach((el, i) => {
+    const cs = getComputedStyle(el); let st = '';
+    for (const p of SVG_PROPS) {
+      let v = cs.getPropertyValue(p); if (!v) continue;
+      if (v.startsWith('url(')) { const m = v.match(/#([^"')]+)/); v = m ? `url(#${m[1]})` : 'none'; }
+      st += `${p}:${v};`;
+    }
+    dst[i].setAttribute('style', st);
+  });
+  clone.querySelectorAll('.hov').forEach(g => g.remove());   // leave out the tap readout
+  const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('viewBox', `${x0} ${y0} ${w} ${h}`); clone.setAttribute('width', w); clone.setAttribute('height', h);
+  const defs = clone.querySelector('defs') || clone.insertBefore(document.createElementNS('http://www.w3.org/2000/svg', 'defs'), clone.firstChild);
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style'); defs.appendChild(style);
+  const ser = withFont => { style.textContent = withFont ? chartFonts() : ''; return new XMLSerializer().serializeToString(clone); };
+  // Safari can refuse some ways of loading a picture, so try a few: as a file, then as text, then without the embedded font.
+  const tries = [
+    () => URL.createObjectURL(new Blob([ser(true)], { type: 'image/svg+xml' })),
+    () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(ser(true)),
+    () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(ser(false)),
+  ];
+  let last;
+  for (const make of tries) {
+    const url = make();
+    try { const img = await loadImg(url); await new Promise(r => setTimeout(r, 60)); return { img, w, h }; }   // a moment for Safari to finish drawing it
+    catch (e) { last = e; }
+    finally { if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
+  throw last || new Error('Couldn’t load the chart picture');
+}
+// Wait for a picture with load and error events. Safari's img.decode() rejects for SVG pictures, so it isn't used.
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const img = new Image(), t = setTimeout(() => rej(new Error('timed out')), 8000);
+    img.onload = () => { clearTimeout(t); img.naturalWidth || img.width ? res(img) : rej(new Error('empty picture')); };
+    img.onerror = () => { clearTimeout(t); rej(new Error('picture failed to load')); };
+    img.src = url;
+  });
+}
+const FONT_STACK = '"Space Grotesk", -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+function wrapText(ctx, text, maxW) {
+  const words = text.split(' '), lines = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+async function chartPNG(fig) {
+  const svg = fig.querySelector(':scope > .chart > svg'), title = chartTitle(fig), sub = chartSubtitle(fig);
+  const { img, w, h } = await chartImage(svg);
+  const root = getComputedStyle(document.documentElement), col = n => root.getPropertyValue(n).trim();
+  const bg = getComputedStyle(document.body).backgroundColor, ink = col('--ink') || '#222', ink2 = col('--ink2') || '#666';
+  const pad = 20, W = Math.max(w + pad * 2, 340), scale = 3;
+  const m = document.createElement('canvas').getContext('2d');
+  m.font = `700 20px ${FONT_STACK}`; const tLines = wrapText(m, title, W - pad * 2);
+  m.font = `500 14px ${FONT_STACK}`; const sLines = wrapText(m, sub, W - pad * 2);
+  // the league chart's legend: one colored line per player
+  // a legend: one colored line per player on the league chart, or solid and dashed lines on the pre-flop trend
+  const leg = fig.querySelector('[data-pchart="trend"]') ? [{ name: 'Played (VPIP)', color: ink, on: true }, { name: 'Bet/raised (PFR)', color: ink, on: true, dash: true }]
+    : [...fig.querySelectorAll('.leg-chip')].map(b => ({ name: b.textContent.trim(), color: b.querySelector('i') ? b.querySelector('i').style.background : ink, on: b.classList.contains('on') }));
+  const dim = leg.some(l => !l.on);
+  m.font = `600 13px ${FONT_STACK}`;
+  const legRows = []; let row = [], rw = 0;
+  for (const l of leg) { const iw = 22 + m.measureText(l.name).width + 14; if (rw + iw > W - pad * 2 && row.length) { legRows.push(row); row = []; rw = 0; } row.push({ ...l, iw }); rw += iw; }
+  if (row.length) legRows.push(row);
+  const H = pad + tLines.length * 26 + sLines.length * 20 + 14 + h + (legRows.length ? 12 + legRows.length * 22 : 0) + 18 + 18 + pad;
+  const c = document.createElement('canvas'); c.width = Math.round(W * scale); c.height = Math.round(H * scale);
+  const ctx = c.getContext('2d'); ctx.scale(scale, scale);
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  let y = pad;
+  ctx.textBaseline = 'top'; ctx.fillStyle = ink; ctx.font = `700 20px ${FONT_STACK}`;
+  for (const t of tLines) { ctx.fillText(t, pad, y); y += 26; }
+  ctx.fillStyle = ink2; ctx.font = `500 14px ${FONT_STACK}`;
+  for (const t of sLines) { ctx.fillText(t, pad, y); y += 20; }
+  y += 14;
+  ctx.drawImage(img, (W - w) / 2, y, w, h); y += h;
+  if (legRows.length) {
+    y += 12; ctx.font = `600 13px ${FONT_STACK}`; ctx.textBaseline = 'middle';
+    for (const r of legRows) {
+      let x = pad;
+      for (const l of r) {
+        ctx.globalAlpha = dim && !l.on ? 0.45 : 1;
+        ctx.strokeStyle = l.color; ctx.lineWidth = l.dash ? 2 : 3; ctx.lineCap = l.dash ? 'butt' : 'round'; ctx.setLineDash(l.dash ? [4, 3] : []);
+        ctx.beginPath(); ctx.moveTo(x, y + 9); ctx.lineTo(x + 14, y + 9); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = ink; ctx.fillText(l.name, x + 20, y + 9); x += l.iw;
+      }
+      y += 22;
+    }
+    ctx.globalAlpha = 1;
+  }
+  y += 18;
+  ctx.textBaseline = 'alphabetic'; ctx.font = `700 13px ${FONT_STACK}`; ctx.fillStyle = ink2;
+  // the header logo for the current look (it's hidden on tabs other than Home, so pick it by theme)
+  const t = document.documentElement.dataset.theme, dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const logo = document.querySelector(dark ? '.logo img.logo-dark' : '.logo img.logo-light');
+  let lx = pad;
+  if (logo && logo.complete && logo.naturalWidth) { ctx.drawImage(logo, lx, y + 1, 16, 16 * (logo.naturalHeight / logo.naturalWidth)); lx += 22; }
+  ctx.fillText('Felt', lx, y + 14);
+  ctx.font = `500 13px ${FONT_STACK}`; ctx.textAlign = 'right'; ctx.fillText(fmtDate(todayISO()), W - pad, y + 14); ctx.textAlign = 'left';
+  const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+  if (!blob) throw new Error('no image');
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'chart';
+  return { blob, name: `felt-${slug}-${todayISO()}.png`, title };
+}
+let chartShot = null;
+Object.assign(A, {
+  'chart-save': async t => {
+    const fig = t.closest('figure'); if (!fig) return;
+    try {
+      const shot = await chartPNG(fig);
+      if (chartShot) URL.revokeObjectURL(chartShot.url);
+      chartShot = { ...shot, url: URL.createObjectURL(shot.blob), file: new File([shot.blob], shot.name, { type: 'image/png' }) };
+      const canShare = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [chartShot.file] }));
+      // iPhone and iPad save through the share sheet; Android and computers can also download the file directly
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      openSheet(`<div class="sheet-head"><span></span><h2>Save image</h2><button class="link strong" data-a="close">Done</button></div>
+        <div class="sheet-body"><img class="chart-shot" src="${chartShot.url}" alt="${esc(shot.title)} chart">
+        ${canShare ? `<div class="stack-btns"><button class="btn primary" data-a="chart-share">Save or share</button>${isIOS ? '' : `<a class="btn" href="${chartShot.url}" download="${esc(shot.name)}">Download image</a>`}</div>
+          <p class="muted small">${isIOS ? 'Choose Save Image to put it in Photos, or send it straight to a chat. You can also press and hold the picture to save it.' : 'Share it to a chat or app, or download it to save it on this device. You can also press and hold the picture to save it.'}</p>`
+        : `<div class="stack-btns"><a class="btn primary" href="${chartShot.url}" download="${esc(shot.name)}">Download image</a></div>
+          <p class="muted small">On a phone, you can also press and hold the picture to save it.</p>`}</div>`);
+    } catch (e) { console.error(e); toast('Couldn’t make an image of this chart. Try a screenshot instead.'); }
+  },
+  'chart-share': async () => {
+    if (!chartShot) return;
+    try { await navigator.share({ files: [chartShot.file], title: chartShot.title }); }
+    catch (e) { if (!(e && e.name === 'AbortError')) toast('Couldn’t open the share menu. Press and hold the picture to save it instead.'); }
+  },
+});
 
 /* ---------------- chips ---------------- */
 // [key, name, chip color, color of the edge spots]
