@@ -3418,13 +3418,16 @@ function brTotals() {
   return { start: b.start, poker, dep, wd, now: b.start + poker + dep - wd, ses };
 }
 // Typical buy-in for each game you've played lately, for the "covers N buy-ins" lines.
+// Usual buy-in: the amount you've bought in for most often in your last 20 sessions of that type.
+// The types shown are the ones you've played most in your last 30 sessions.
 function brCoverage(now) {
-  const recent = sortedAsc().filter(brCounts).slice(-30), by = new Map();
-  for (const s of recent) { const k = key(s.type); if (!by.has(k)) by.set(k, { name: s.type, list: [] }); by.get(k).list.push(s.buyIn); by.get(k).name = s.type; }
+  const all = sortedAsc().filter(brCounts), by = new Map();
+  for (const s of all.slice(-30)) { const k = key(s.type); if (!by.has(k)) by.set(k, { name: s.type, n: 0 }); by.get(k).n++; by.get(k).name = s.type; }
+  for (const [k, g] of by) g.list = all.filter(s => key(s.type) === k).slice(-20).map(s => s.buyIn);
   return [...by.values()].map(g => {
     const counts = new Map(); g.list.filter(c => c > 0).forEach(c => counts.set(c, (counts.get(c) || 0) + 1));
     let best = 0, bc = 0; for (const [c, n] of counts) if (n > bc || (n === bc && c < best)) { best = c; bc = n; }
-    return { name: g.name, n: g.list.length, buyIn: best };
+    return { name: g.name, n: g.n, buyIn: best };
   }).filter(g => g.buyIn > 0).sort((a, b) => b.n - a.n).slice(0, 3).map(g => ({ ...g, covers: Math.floor(Math.max(0, now) / g.buyIn) }));
 }
 function bankrollCardHTML() {
@@ -3449,7 +3452,7 @@ function openBankroll() {
       <tr><td><b>Current bankroll</b></td><td><b>${usdC(t.now)}</b></td></tr>
     </tbody></table>
     ${cov.length ? `<h3>Buy-ins covered</h3><table class="bt stats"><tbody>${cov.map(c => `<tr><td>${esc(c.name)}<div class="sub">${usdShort(c.buyIn)} buy-in</div></td><td>${c.covers} buy-in${c.covers === 1 ? '' : 's'}</td></tr>`).join('')}</tbody></table>
-      <p class="muted small">How many of your usual buy-ins your bankroll could cover. Many players like to keep 20 or more for a game.</p>` : ''}
+      <p class="muted small">How many of your usual buy-ins your bankroll could cover. Your usual buy-in is the total you’ve bought in for most often in your last 20 sessions of that type. Many players like to keep 20 or more for a game.</p>` : ''}
     <figure id="br-chart" style="margin-top:18px"><div class="fig-head"><span class="fig-label">Bankroll over time</span></div><div class="chart" data-h="170"></div><div class="readout" aria-live="polite"></div></figure>
     <h3>Deposits and withdrawals</h3>
     ${tx.length ? `<table class="bt list"><tbody>${tx.map(x => `<tr data-a="br-tx-edit" data-id="${esc(x.id)}" tabindex="0"><td class="date">${fmtDate(x.date, x.date.slice(0, 4) !== todayISO().slice(0, 4))}</td><td><div class="ty">${x.kind === 'd' ? 'Deposit' : 'Withdrawal'}</div>${x.note ? `<div class="sub note-line">${esc(x.note)}</div>` : ''}</td><td class="num ${x.kind === 'd' ? 'pos' : 'neg'}">${x.kind === 'd' ? '+' : MINUS}${usdC(x.c)}</td></tr>`).join('')}</tbody></table>`
