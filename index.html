@@ -162,7 +162,15 @@ a.btn { text-decoration: none; display: flex; align-items: center; justify-conte
 .cc-step { width: 136px; flex: none; grid-template-columns: 42px 1fr 42px; background: var(--sheet); }
 .cc-total { margin: 10px 0 0; }
 .cc-src { margin: 8px 0 0; }
-.cc-edit { margin-top: 8px; font-size: 14px; font-weight: 600; padding: 4px 0; }
+.cc-lbl { margin: 10px 0 8px; }
+.cc-sets { margin-bottom: 4px; }
+.cc-links { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; }
+.cc-edit { font-size: 14px; font-weight: 600; padding: 4px 0; }
+.ce-head { display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 1fr) 40px; gap: 10px; margin-bottom: 6px; }
+.ps-sws { display: flex; flex: none; }
+.ps-sws .chip-sw { width: 20px; height: 20px; border-width: 2px; margin-left: -6px; }
+.ps-sws .chip-sw:first-child { margin-left: 0; }
+.ps-h { margin: 16px 0 8px; }
 .ce-row { display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 1fr) 40px; gap: 10px; align-items: center; margin-bottom: 10px; }
 .ce-del { border: 0; background: none; font-size: 24px; line-height: 1; color: var(--ink2); min-height: 44px; border-radius: 10px; }
 .ce-del:active { background: var(--press); }
@@ -603,8 +611,8 @@ function ingest(d) {
     };
     const okL = lg => lg && /^[A-Z0-9]{6}$/.test(lg.code) && typeof lg.player === 'string' && lg.player.trim();
     const cleanL = lg => { const o = { code: lg.code, name: String(lg.name || 'League').slice(0, 32), player: lg.player.slice(0, 24) }; if (typeof lg.type === 'string' && lg.type) o.type = lg.type.slice(0, 60);
-  // the league's chips, kept so sessions can count chips even before the league loads
-  if (Array.isArray(lg.chips)) { const ch = lg.chips.filter(x => x && typeof x.c === 'string' && x.c.length <= 12 && Number.isInteger(x.v) && x.v > 0 && x.v <= 10000000).slice(0, 12).map(x => ({ c: x.c, v: x.v })); if (ch.length) o.chips = ch; }
+  // the league's poker sets, kept so sessions can count chips even before the league loads
+  const ls = setsOf(lg); if (ls.length) o.sets = ls;
   return o; };
     const list = Array.isArray(d.leagues) ? d.leagues : d.league ? [d.league] : [];   // older saves had a single league
     S.leagues = list.filter(okL).map(cleanL).filter((l, i, a) => a.findIndex(x => x.code === l.code) === i);
@@ -623,13 +631,18 @@ function ingest(d) {
       if (typeof st.keepAwake === 'boolean') S.settings.keepAwake = st.keepAwake;
       if (st.anView === 'preflop') S.settings.anView = 'preflop';
       if (Number.isInteger(st.players) && st.players >= 3 && st.players <= 10) S.settings.players = st.players;
-      // your own chips for session types that aren't linked to a league, keyed by session type
-      const okCh = l => Array.isArray(l) ? l.filter(x => x && typeof x.c === 'string' && x.c.length <= 12 && Number.isInteger(x.v) && x.v > 0 && x.v <= 10000000).slice(0, 12).map(x => ({ c: x.c, v: x.v })) : [];
-      if (st.chipSets && typeof st.chipSets === 'object') {
-        const o = {}; for (const [k, l] of Object.entries(st.chipSets).slice(0, 40)) { const ch = okCh(l); if (k.length <= 60 && ch.length) o[k] = ch; }
-        S.settings.chipSets = o;
+      // your poker sets, and which set you picked last in each league or session type
+      S.settings.pokerSets = cleanSets(st.pokerSets);
+      S.settings.setPick = {};
+      if (st.setPick && typeof st.setPick === 'object') for (const [k, v] of Object.entries(st.setPick).slice(0, 60)) if (k.length <= 80 && typeof v === 'string') S.settings.setPick[k] = v.slice(0, 40);
+      // chips saved per session type before poker sets existed become sets named after the type
+      if (!Array.isArray(st.pokerSets) && st.chipSets && typeof st.chipSets === 'object') {
+        for (const [k, l] of Object.entries(st.chipSets).slice(0, MAX_MY_SETS)) {
+          const chips = cleanChips(l), typeName = (S.sessions.find(x => key(x.type) === k) || {}).type || k;
+          if (!chips.length || S.settings.pokerSets.length >= MAX_MY_SETS) continue;
+          const id = uid(); S.settings.pokerSets.push({ id, name: typeName.slice(0, 32), chips }); S.settings.setPick['type:' + k] = id;
+        }
       }
-      if (okCh(st.chipLast).length) S.settings.chipLast = okCh(st.chipLast);
       const fl = st.filters || {};
       S.settings.filters = { type: typeof fl.type === 'string' ? fl.type : '', start: isISO(fl.start) ? fl.start : '', end: isISO(fl.end) ? fl.end : '' };
     }
@@ -850,7 +863,7 @@ function readForm() {
 function updateForm() {
   if (!$('#sf')) return;
   const v = readForm();
-  document.querySelectorAll('#sf .chip').forEach(c => c.setAttribute('aria-pressed', String(key(c.dataset.name) === key(v.type) && v.type !== '')));
+  document.querySelectorAll('#sf .chip[data-name]').forEach(c => c.setAttribute('aria-pressed', String(key(c.dataset.name) === key(v.type) && v.type !== '')));
   let calc = '';
   if (v.buyIn != null && v.stack != null) calc = `Net result ${moneyHTML((v.stack - v.buyIn) / 100)}.`;
   $('#f-calc').innerHTML = calc;
@@ -917,6 +930,9 @@ function openSettings() {
     <h3>Bankroll</h3>
     <label class="switch cb-switch" style="margin-top:0"><input type="checkbox" id="br-on"${S.bankroll.on ? ' checked' : ''}><span><b>Track my bankroll</b><br><span class="muted small">Shows your bankroll on Home, with deposits and withdrawals. Your poker stats don’t change.</span></span></label>
     ${S.bankroll.on ? '<div class="stack-btns"><button class="btn" data-a="br-open">Open bankroll</button></div>' : ''}
+    <h3>Poker sets</h3>
+    <p class="muted small">Save the chips in each poker set you play with, then count your chips when you log or end a session.</p>
+    <button class="btn wide" data-a="ps-my">My poker sets${mySets().length ? ` (${mySets().length})` : ''}</button>
     <h3>Backup</h3>
     <p class="muted small">Save everything in one backup you can restore on any phone. ${S.backupAt ? `Last backup: ${fmtDate(new Date(S.backupAt).toISOString().slice(0, 10))}.` : 'You haven’t made a backup yet.'}</p>
     <button class="btn wide" data-a="backup-page">Back up or restore</button>
@@ -1436,7 +1452,7 @@ const A = {
     toast(`Deleted ${s.type} on ${fmtDate(s.date)}.`, () => restore(snap));
   },
   chip: t => {
-    $('#f-type').value = t.dataset.name; pickLeagueFor(t.dataset.name);
+    $('#f-type').value = t.dataset.name; pickLeagueFor(t.dataset.name); ccRetarget(t.dataset.name);
     updateForm();
   },
   settings: () => openSettings(),
@@ -2205,7 +2221,8 @@ async function fbStart() {
     uid: user.uid,
     async getLeague(code) { const d = await settle(() => F.getDoc(L(code))); return d.exists() ? { code, ...d.data() } : null; },
     async setSeasons(code, seasons) { await F.updateDoc(L(code), { seasons }); },
-    async setChips(code, chips) { await F.updateDoc(L(code), { chips }); },
+    // the first set's chips are also kept in `chips`, so friends on an older version still see chips
+    async setSets(code, sets) { await F.updateDoc(L(code), { sets, chips: sets.length ? sets[0].chips : [] }); },
     async createLeague(code, name) { await F.setDoc(L(code), { name, createdBy: user.uid, createdAt: F.serverTimestamp() }); },
     async setMember(code, name) { await F.setDoc(F.doc(db, 'leagues', code, 'members', user.uid), { name, joinedAt: F.serverTimestamp() }, { merge: true }); },
     async setClaims(code, claims, uid) { await F.updateDoc(F.doc(db, 'leagues', code, 'members', uid || user.uid), { claims }); },
@@ -2296,7 +2313,7 @@ function lgStart() {
       LGD[kind] = val; LGD.ready = true; LGD.error = ''; LGD['got_' + kind] = true;
       if (lgClaimAsk && LGD.got_members && LGD.got_results && LGD.members.some(m => m.id === LGD.uid)) { lgClaimAsk = false; if (unclaimedNames().length && $('#backdrop').hidden && tab === 'league') setTimeout(() => openClaim(true), 0); }
       if (kind === 'league' && val && val.name !== S.league.name) { S.league.name = val.name; save(); }
-      if (kind === 'league' && val && JSON.stringify(cleanChips(val.chips)) !== JSON.stringify(S.league.chips || [])) { S.league.chips = cleanChips(val.chips); save(); }
+      if (kind === 'league' && val) { const ls = setsOf(val); if (JSON.stringify(ls) !== JSON.stringify(S.league.sets || [])) { S.league.sets = ls; delete S.league.chips; save(); } }
       if (tab === 'league' && $('#backdrop').hidden) renderLeague();
     }, err => { if (err && err.code === 'permission-denied') LGD.rejoin = true; else LGD.error = 'Couldn’t reach the league. Check your connection.'; if (tab === 'league') renderLeague(); }));
   }).catch(e => { LGD.error = lgErr(e, 'connect to the league'); if (tab === 'league') renderLeague(); });
@@ -2465,7 +2482,7 @@ function openLeagueOptions() {
     <p class="muted small" style="margin-top:-8px">When you save a session of this type, Felt offers to add it to ${esc(lg.name)}.</p>
     <div class="opt-list">
       ${org || lgSeasons().length ? row('lg-seasons', 'Seasons', lgSeasons().length ? `${lgSeasons().length} season${lgSeasons().length === 1 ? '' : 's'}` : 'Group results into seasons') : ''}
-      ${org || lgChips().length ? row('lg-chips', 'Chips', lgChips().length ? chipSummary(lgChips()) : 'Set your chip colors and values') : ''}
+      ${org || lgSets().length ? row('lg-sets', 'Poker sets', lgSets().length ? `${lgSets().length} set${lgSets().length === 1 ? '' : 's'}: ${esc(setNames(lgSets()))}` : 'Add the chip sets your league plays with') : ''}
       ${row('lg-pack', 'League GIFs', 'Upload GIFs everyone can react with')}
     </div>
     ${org ? `<h3>Organizer</h3><div class="opt-list">
@@ -2519,7 +2536,7 @@ function openResultForm(r) {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" value="${v.buyIn}" placeholder="0.00"></div></label>
       <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" value="${v.out}" placeholder="0.00"></div></label>
     </div>
-    ${chipCalcHTML(lgChips(), '#lg-out', r && !isMine(r) ? 'their' : 'my')}
+    ${chipCalcHTML(lgSets(), 'lg:' + S.league.code, '#lg-out', r && !isMine(r) ? 'their' : 'my')}
     <p class="calc" id="lg-calc" aria-live="polite"></p>
     ${r ? '' : `<label class="switch also-sess"><input type="checkbox" id="lg-also"${S.settings.alsoSession ? ' checked' : ''}><span><b>Also save as a session</b><br><span class="muted small">Adds it to your own sessions and stats too.</span></span></label>
     <div id="lg-also-box"${S.settings.alsoSession ? '' : ' hidden'}><label class="field"><span>Session type</span><input type="search" id="lg-also-type" value="${esc(S.league.type || S.league.name)}" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" enterkeyhint="done"></label>
@@ -2573,7 +2590,7 @@ function openAddFor() {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="lg-in" inputmode="decimal" placeholder="0.00"></div></label>
       <label class="field"><span>Cashed out</span><div class="money"><i>$</i><input type="text" id="lg-out" inputmode="decimal" placeholder="0.00"></div></label>
     </div>
-    ${chipCalcHTML(lgChips(), '#lg-out', 'their')}
+    ${chipCalcHTML(lgSets(), 'lg:' + S.league.code, '#lg-out', 'their')}
     <p class="calc" id="lg-calc" aria-live="polite"></p>
     <p class="err" id="lg-err" role="alert"></p>
   </form></div>`, { backdropCloses: false });
@@ -3003,7 +3020,9 @@ Object.assign(A, {
   },
 });
 
-/* ---------------- chips ---------------- */
+/* ---------------- poker sets and chips ---------------- */
+// A poker set is a named group of chips: { id, name, chips: [{ c: color key, v: value in cents }] }.
+// You keep your own sets on this phone (Settings), and a league's organizer keeps the league's sets (League options).
 // [key, name, chip color, color of the edge spots]
 const CHIP_COLORS = [
   ['white', 'White', '#f3efe4', '#7fb6e3'], ['red', 'Red', '#c0392b', '#f6e7e4'], ['blue', 'Blue', '#2563c9', '#e3ecfa'],
@@ -3011,36 +3030,52 @@ const CHIP_COLORS = [
   ['maroon', 'Maroon', '#7a1f2b', '#f2c230'], ['orange', 'Orange', '#e5731c', '#fbe9dc'], ['pink', 'Pink', '#e05596', '#b9edb5'],
   ['gray', 'Gray', '#8a8f98', '#eef0f2'], ['brown', 'Brown', '#7d5232', '#5a9be6'], ['teal', 'Teal', '#138a80', '#dff3f1'],
 ];
+const MAX_MY_SETS = 20, MAX_LG_SETS = 10;
 const chipColor = k => CHIP_COLORS.find(c => c[0] === k) || CHIP_COLORS[0];
 const chipSw = k => { const c = chipColor(k); return `<span class="chip-sw" style="--c:${c[2]};--d:${c[3]}" aria-hidden="true"></span>`; };
-// chips are {c: color key, v: value in cents}, smallest first
+// chips, smallest first
 const cleanChips = list => (Array.isArray(list) ? list : []).filter(x => x && CHIP_COLORS.some(c => c[0] === x.c) && Number.isInteger(x.v) && x.v > 0 && x.v <= MAX_C).sort((a, b) => a.v - b.v).slice(0, 12);
-const lgChips = () => cleanChips(LGD.league && 'chips' in LGD.league ? LGD.league.chips : S.league && S.league.chips);
 const chipSummary = list => `${list.length} chip${list.length === 1 ? '' : 's'}, ${list.length === 1 ? usdC(list[0].v) : `${usdC(list[0].v)} to ${usdC(list[list.length - 1].v)}`}`;
-// For a session: a league's chips only when the session type is linked to that league. Otherwise your own chips for that type.
-function chipSource(type) {
-  const k = key(type || ''), lg = k && S.leagues.find(l => l.type && key(l.type) === k && cleanChips(l.chips).length);
-  if (lg) return { chips: cleanChips(lg.chips), league: lg, k };
-  return { chips: cleanChips((S.settings.chipSets || {})[k]), k };
+function cleanSet(x, i) {
+  const chips = cleanChips(x && x.chips); if (!chips.length) return null;
+  return { id: typeof x.id === 'string' && x.id ? x.id.slice(0, 40) : 'set' + i, name: (typeof x.name === 'string' && x.name.trim() ? x.name.trim().replace(/\s+/g, ' ') : 'Poker set').slice(0, 32), chips };
 }
-const chipsForType = type => chipSource(type).chips;
-// The session form's chip counter, with a way to set up or change your own chips.
-function sessionCCHTML(type, open = false) {
-  const src = chipSource(type);
-  if (src.league) return chipCalcHTML(src.chips, '#f-stack', 'my', `<p class="muted small cc-src">These are ${esc(src.league.name)}’s chips.</p>`, open);
-  if (src.chips.length) return chipCalcHTML(src.chips, '#f-stack', 'my', '<button type="button" class="link cc-edit" data-a="pc-edit">Change these chips</button>', open);
-  return `<div class="cc" data-target="#f-stack" data-sig=""><button type="button" class="link cc-open" data-a="pc-edit">${chipSw('white')}Count my chips</button></div>`;
+const cleanSets = (l, max = MAX_MY_SETS) => (Array.isArray(l) ? l : []).map(cleanSet).filter(Boolean).filter((x, i, a) => a.findIndex(y => y.id === x.id) === i).slice(0, max);
+// A league's sets. Leagues set up before poker sets had a single list of chips, which becomes one set.
+function setsOf(l) {
+  if (!l) return [];
+  if (Array.isArray(l.sets)) return cleanSets(l.sets, MAX_LG_SETS);
+  const ch = cleanChips(l.chips);
+  return ch.length ? [{ id: 'main', name: 'League chips', chips: ch }] : [];
+}
+const lgSets = () => (LGD.league && (Array.isArray(LGD.league.sets) || Array.isArray(LGD.league.chips)) ? setsOf(LGD.league) : setsOf(S.league));
+const mySets = () => cleanSets(S.settings.pokerSets);
+const setNames = sets => sets.map(x => x.name).join(', ');
+// the set picked last time in this place (a league, or a session type), so it's already chosen next time
+const pickedSet = (sets, ctx) => { const id = (S.settings.setPick || {})[ctx]; return sets.find(x => x.id === id) || sets[0]; };
+function rememberSet(ctx, id) { S.settings.setPick = { ...(S.settings.setPick || {}), [ctx]: id }; save(); }
+
+// Which sets a session counts with: the league's, when its session type is linked to a league that has sets; otherwise yours.
+function chipSource(type) {
+  const k = key(type || ''), lg = k && S.leagues.find(l => l.type && key(l.type) === k && setsOf(l).length);
+  if (lg) return { sets: setsOf(lg), ctx: 'lg:' + lg.code, league: lg };
+  return { sets: mySets(), ctx: 'type:' + k };
 }
 
-// The chip calculator: count each color, and the total fills in the cash-out or ending stack.
-function chipCalcHTML(chips, target, who = 'my', foot = '', open = false) {
-  if (!chips.length) return '';
-  return `<div class="cc" data-target="${target}" data-who="${who}" data-sig="${esc(JSON.stringify(chips))}">
-    <button type="button" class="link cc-open" data-a="cc-toggle" aria-expanded="${open}">${chipSw(chips[0].c)}Count ${who === 'their' ? 'their' : 'my'} chips</button>
+// The chip counter. With several sets, you pick the one you played with; the total fills in the cash-out or ending stack.
+const ccRowsHTML = chips => chips.map(c => { const nm = chipColor(c.c)[1]; return `<div class="cc-row"><span class="cc-label">${chipSw(c.c)}<span><b>${nm}</b><span class="muted small">${usdC(c.v)} each</span></span></span>
+  <div class="stepper cc-step"><button type="button" data-a="cc-step" data-d="-1" aria-label="One fewer ${nm} chip">−</button><input type="text" class="cc-n" inputmode="numeric" maxlength="4" data-v="${c.v}" placeholder="0" aria-label="Number of ${nm} chips"><button type="button" data-a="cc-step" data-d="1" aria-label="One more ${nm} chip">+</button></div></div>`; }).join('');
+function chipCalcHTML(sets, ctx, target, who = 'my', foot = '', open = false) {
+  if (!sets.length) return '';
+  const cur = pickedSet(sets, ctx);
+  return `<div class="cc" data-target="${target}" data-who="${who}" data-ctx="${esc(ctx)}" data-set="${esc(cur.id)}" data-sig="${esc(JSON.stringify(sets))}">
+    <button type="button" class="link cc-open" data-a="cc-toggle" aria-expanded="${open}">${chipSw(cur.chips[0].c)}Count ${who === 'their' ? 'their' : 'my'} chips</button>
     <div class="cc-body"${open ? '' : ' hidden'}>
-      ${chips.map(c => { const nm = usdC(c.v); return `<div class="cc-row"><span class="cc-label">${chipSw(c.c)}<span><b>${nm}</b><span class="muted small">chips</span></span></span>
-        <div class="stepper cc-step"><button type="button" data-a="cc-step" data-d="-1" aria-label="One fewer ${nm} chip">−</button><input type="text" class="cc-n" inputmode="numeric" maxlength="4" data-v="${c.v}" placeholder="0" aria-label="Number of ${nm} chips"><button type="button" data-a="cc-step" data-d="1" aria-label="One more ${nm} chip">+</button></div></div>`; }).join('')}
-      <p class="cc-total" aria-live="polite">${open ? `<span class="muted">Enter how many of each chip you have.</span>` : ''}</p>${foot}
+      ${sets.length > 1 ? `<p class="muted small cc-lbl" id="cc-lbl">Which poker set did ${who === 'their' ? 'they' : 'you'} play with?</p>
+        <div class="chips cc-sets" role="group" aria-labelledby="cc-lbl">${sets.map(x => `<button type="button" class="chip" data-a="cc-set" data-id="${esc(x.id)}" aria-pressed="${x.id === cur.id}">${esc(x.name)}</button>`).join('')}</div>`
+      : `<p class="small cc-lbl"><b>${esc(cur.name)}</b></p>`}
+      <div class="cc-rows">${ccRowsHTML(cur.chips)}</div>
+      <p class="cc-total" aria-live="polite">${open ? `<span class="muted">Enter how many of each chip ${who === 'their' ? 'they have' : 'you have'}.</span>` : ''}</p>${foot}
     </div></div>`;
 }
 function ccUpdate(box, write = true) {
@@ -3052,35 +3087,38 @@ function ccUpdate(box, write = true) {
   const t = $(box.dataset.target); if (!t) return;
   t.value = (tot / 100).toFixed(2); t.dispatchEvent(new Event('input', { bubbles: true }));
 }
-// In the session form, switch to the chips of the league that matches the session type, if nothing's been counted yet.
-function ccRetarget(type) {
-  const wrap = $('#f-cc'); if (!wrap) return;
-  const box = wrap.querySelector('.cc'), chips = chipsForType(type);
-  if (box && [...box.querySelectorAll('.cc-n')].some(i => i.value)) return;
-  if (wrap.querySelector('.pc-edit-box')) return;   // leave the chip editor alone while it's open
-  if (!box || box.dataset.sig !== (chips.length ? JSON.stringify(chips) : '') || !!chipSource(type).league !== !!box.querySelector('.cc-src')) wrap.innerHTML = sessionCCHTML(type);
-}
 document.addEventListener('input', e => {
   if (!e.target.classList || !e.target.classList.contains('cc-n')) return;
   const v = e.target.value.replace(/\D/g, '').slice(0, 4); if (v !== e.target.value) e.target.value = v;
   ccUpdate(e.target.closest('.cc'));
 });
 
-function openChips() {
-  const org = LGD.league && LGD.league.createdBy === LGD.uid, list = lgChips();
-  if (!org) return openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Chips</h2><button class="link strong" data-a="close">Done</button></div>
-    <div class="sheet-body"><p class="muted small" style="margin-top:0">The chips ${esc(S.league.name)} plays with. When you add a result, tap Count my chips and Felt works out your cash-out.</p>
-    <div class="chip-list">${list.map(c => `<div><span>${chipSw(c.c)}<b>${chipColor(c.c)[1]}</b></span><span>${usdC(c.v)}</span></div>`).join('')}</div></div>`);
-  const rows = list.length ? list : [{ c: 'white', v: null }];
-  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Chips</h2><button class="link strong" data-a="ce-save">Save</button></div>
-  <div class="sheet-body"><form id="cef" class="ce-box" novalidate>
-    <p class="muted small" style="margin-top:0">Set the chips your league plays with. Then anyone adding a result can count their chips, and Felt works out the total.</p>
-    <div class="ce-head muted small" style="display:grid;grid-template-columns:26px minmax(0,1.2fr) minmax(0,1fr) 40px;gap:10px;margin-bottom:6px"><span></span><span>Color</span><span>Value</span><span></span></div>
-    <div id="ce-rows">${rows.map(ceRowHTML).join('')}</div>
-    <div class="stack-btns ce-add-wrap" id="ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ce-add">Add a chip</button></div>
-    <p class="err" id="lg-err" role="alert"></p>
-  </form></div>`, { backdropCloses: false });
+// The session form's counter, with your own sets editable right there.
+function sessionCCHTML(type, open = false) {
+  const src = chipSource(type);
+  if (src.league) return chipCalcHTML(src.sets, src.ctx, '#f-stack', 'my', `<p class="muted small cc-src">Poker sets from ${esc(src.league.name)}.</p>`, open);
+  if (src.sets.length) return chipCalcHTML(src.sets, src.ctx, '#f-stack', 'my', `<div class="cc-links"><button type="button" class="link cc-edit" data-a="ps-inline-edit">Edit this set</button>${src.sets.length < MAX_MY_SETS ? '<button type="button" class="link cc-edit" data-a="ps-inline-new">Add a set</button>' : ''}</div>`, open);
+  return `<div class="cc" data-sig="" data-ctx="${esc(src.ctx)}"><button type="button" class="link cc-open" data-a="ps-inline-new">${chipSw('white')}Count my chips</button></div>`;
 }
+// In the session form, switch to the right sets when the session type changes, unless chips have been counted or a set is being edited.
+function ccRetarget(type) {
+  const wrap = $('#f-cc'); if (!wrap || wrap.querySelector('.ps-edit')) return;
+  const box = wrap.querySelector('.cc'); if (box && [...box.querySelectorAll('.cc-n')].some(i => i.value)) return;
+  const src = chipSource(type);
+  if (!box || box.dataset.sig !== (src.sets.length ? JSON.stringify(src.sets) : '') || box.dataset.ctx !== src.ctx) wrap.innerHTML = sessionCCHTML(type);
+}
+
+// The editor for one set: its name and chips. Used in the session form, your sets in Settings, and the league's sets.
+const ceRowHTML = x => `<div class="ce-row">${chipSw(x.c)}<div class="select"><select class="ce-color" aria-label="Chip color">${CHIP_COLORS.map(c => `<option value="${c[0]}"${c[0] === x.c ? ' selected' : ''}>${c[1]}</option>`).join('')}</select></div><div class="money"><i>$</i><input type="text" class="ce-v" inputmode="decimal" value="${x.v ? (x.v / 100).toFixed(2) : ''}" placeholder="0.25" aria-label="Chip value"></div><button type="button" class="ce-del" data-a="ce-del" aria-label="Remove this chip">×</button></div>`;
+function setEditorHTML(st) {
+  const rows = st && st.chips.length ? st.chips : [{ c: 'white', v: null }];
+  return `<label class="field"><span>Set name</span><input type="text" id="ps-name" value="${st ? esc(st.name) : ''}" placeholder="Like Viper’s set" maxlength="32" autocapitalize="words" autocomplete="off"></label>
+    <div class="muted small ce-head"><span></span><span>Chip color</span><span>Value</span><span></span></div>
+    <div id="ps-rows">${rows.map(ceRowHTML).join('')}</div>
+    <div class="stack-btns ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ps-add-chip">Add a chip</button></div>
+    <p class="err" id="ps-err" role="alert"></p>`;
+}
+const psFail = m => { const e = $('#ps-err'); if (e) e.textContent = m; };
 // Read the chip rows in an editor: { chips } or { err } with a message to show.
 function readChipRows(root) {
   const list = [], seen = new Set();
@@ -3095,50 +3133,129 @@ function readChipRows(root) {
   }
   return { chips: cleanChips(list) };
 }
-const ceRowHTML = x => `<div class="ce-row">${chipSw(x.c)}<div class="select"><select class="ce-color" aria-label="Chip color">${CHIP_COLORS.map(c => `<option value="${c[0]}"${c[0] === x.c ? ' selected' : ''}>${c[1]}</option>`).join('')}</select></div><div class="money"><i>$</i><input type="text" class="ce-v" inputmode="decimal" value="${x.v ? (x.v / 100).toFixed(2) : ''}" placeholder="0.25" aria-label="Chip value"></div><button type="button" class="ce-del" data-a="ce-del" aria-label="Remove this chip">×</button></div>`;
+// Read the open editor into a set, checking its name against the other sets in the same list.
+function readSet(list, id) {
+  const name = ($('#ps-name').value || '').trim().replace(/\s+/g, ' ');
+  if (!name) return { err: 'Give this set a name, like Viper’s set.' };
+  if (list.some(x => x.id !== id && key(x.name) === key(name))) return { err: `You already have a set called ${name}. Pick another name.` };
+  const got = readChipRows($('#ps-rows')); if (got.err) return got;
+  if (!got.chips.length) return { err: 'Add at least one chip.' };
+  return { set: { id: id || uid(), name, chips: got.chips } };
+}
 document.addEventListener('change', e => {
-  if (e.target.classList && e.target.classList.contains('ce-color')) { const row = e.target.closest('.ce-row'); row.querySelector('.chip-sw').outerHTML = chipSw(e.target.value); lgFail(''); }
+  if (e.target.classList && e.target.classList.contains('ce-color')) { const row = e.target.closest('.ce-row'); row.querySelector('.chip-sw').outerHTML = chipSw(e.target.value); psFail(''); }
 });
-document.addEventListener('input', e => {
-  if (!e.target.closest) return;
-  if (e.target.closest('#cef')) lgFail('');
-  if (e.target.closest('.pc-edit-box')) { const pe = $('#pc-err'); if (pe) pe.textContent = ''; }   // a fix clears the last message
-});
+document.addEventListener('input', e => { if (e.target.closest && e.target.closest('.ps-edit')) psFail(''); });   // a fix clears the last message
+
+// Lists of sets, in Settings (yours) and League options (the league's)
+const setRowHTML = (x, a) => `<button type="button" class="opt-row" data-a="${a}" data-id="${esc(x.id)}"><span><b>${esc(x.name)}</b><span class="muted small">${chipSummary(x.chips)}</span></span><span class="ps-sws">${x.chips.slice(0, 6).map(c => chipSw(c.c)).join('')}</span></button>`;
+function openMySets() {
+  const sets = mySets();
+  openSheet(`<div class="sheet-head"><button class="link" data-a="settings">Back</button><h2>My poker sets</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><p class="muted small" style="margin-top:0">The poker sets you play with. When you log or end a session, pick the set you used and count your chips. Sets are saved on this phone and in your backups.</p>
+    ${sets.length ? `<div class="opt-list">${sets.map(x => setRowHTML(x, 'ps-my-edit')).join('')}</div>` : '<p class="muted">You haven’t added any sets yet.</p>'}
+    ${sets.length < MAX_MY_SETS ? '<div class="stack-btns"><button class="btn" data-a="ps-my-new">Add a poker set</button></div>' : ''}</div>`);
+}
+function openSetSheet(host, id) {
+  const list = host === 'lg' ? lgSets() : mySets(), st = id ? list.find(x => x.id === id) : null;
+  openSheet(`<div class="sheet-head"><button class="link" data-a="${host === 'lg' ? 'lg-sets' : 'ps-my'}">Back</button><h2>${st ? 'Edit poker set' : 'New poker set'}</h2><button class="link strong" data-a="ps-sheet-save" data-host="${host}" data-id="${st ? esc(st.id) : ''}">Save</button></div>
+  <div class="sheet-body"><form class="ps-edit ce-box" novalidate>
+    ${host === 'lg' ? `<p class="muted small" style="margin-top:0">Everyone in ${esc(S.league.name)} can pick this set when they count their chips.</p>` : ''}
+    ${setEditorHTML(st)}
+    ${st ? `<div class="stack-btns"><button type="button" class="btn danger" data-a="ps-sheet-del" data-host="${host}" data-id="${esc(st.id)}">Delete this set</button></div>` : ''}
+  </form></div>`, { backdropCloses: false });
+}
+function openLgSets() {
+  const org = LGD.league && LGD.league.createdBy === LGD.uid, sets = lgSets();
+  if (!org) return openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Poker sets</h2><button class="link strong" data-a="close">Done</button></div>
+    <div class="sheet-body"><p class="muted small" style="margin-top:0">The poker sets ${esc(S.league.name)} plays with. When you add a result, tap Count my chips and pick the set you used.</p>
+    ${sets.map(x => `<h3 class="ps-h">${esc(x.name)}</h3><div class="chip-list">${x.chips.map(c => `<div><span>${chipSw(c.c)}<b>${usdC(c.v)}</b></span><span class="muted small">${chipColor(c.c)[1]}</span></div>`).join('')}</div>`).join('')}</div>`);
+  const mine = mySets();
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Poker sets</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><p class="muted small" style="margin-top:0">Add the poker sets your league plays with. Everyone can then pick the set used that night and count their chips. Only you can change them.</p>
+    ${sets.length ? `<div class="opt-list">${sets.map(x => setRowHTML(x, 'ps-lg-edit')).join('')}</div>` : '<p class="muted">No sets yet.</p>'}
+    ${sets.length < MAX_LG_SETS ? '<div class="stack-btns"><button class="btn" data-a="ps-lg-new">Add a poker set</button></div>' : ''}
+    ${mine.length && sets.length < MAX_LG_SETS ? `<h3>Copy from my poker sets</h3><p class="muted small">Adds a copy of one of your own sets. If the league already has a set with that name, its chips are updated to match yours.</p>
+      <div class="chips">${mine.map(x => `<button type="button" class="chip" data-a="ps-copy" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('')}</div>` : ''}
+    <p class="err" id="lg-err" role="alert"></p></div>`);
+}
+// Opening a panel hides any message, so callers show their message after reopening the list.
+async function saveLgSets(sets) {
+  const code = S.league.code;
+  const be = await lgBackend(); await be.setSets(code, sets);
+  if (LGD.league) { LGD.league.sets = sets; LGD.league.chips = sets.length ? sets[0].chips : []; }
+  S.league.sets = sets; delete S.league.chips; save();
+  renderLeague();
+}
+const lgSetsOpen = () => !!($('#sheet [data-a="ps-lg-new"]') || $('#sheet [data-a="ps-copy"]') || ($('.sheet-head h2') && $('.sheet-head h2').textContent === 'Poker sets'));
+function saveMySets(sets) { S.settings.pokerSets = sets; save(); }
+
 Object.assign(A, {
-  'lg-chips': () => openChips(),
-  'pc-edit': () => {
-    const wrap = $('#f-cc'); if (!wrap) return;
-    const type = ($('#f-type').value || '').trim().replace(/\s+/g, ' '), src = chipSource(type);
-    const start = src.chips.length ? src.chips : cleanChips(S.settings.chipLast);
-    const rows = start.length ? start : [{ c: 'white', v: null }];
-    wrap.innerHTML = `<div class="cc pc-edit-box ce-box"><div class="cc-body">
-      <p class="small" style="margin:8px 0 10px">${type ? `<b>Your chips for ${esc(type)}</b><br><span class="muted">Felt remembers these for your next ${esc(type)} session. They don’t change any league’s chips.</span>` : '<span class="muted">Choose a session type first, so Felt can remember these chips for it.</span>'}</p>
-      ${type ? `<div class="muted small" style="display:grid;grid-template-columns:26px minmax(0,1.2fr) minmax(0,1fr) 40px;gap:10px;margin-bottom:6px"><span></span><span>Color</span><span>Value</span><span></span></div>
-      <div id="pc-rows">${rows.map(ceRowHTML).join('')}</div>
-      <div class="stack-btns ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="pc-add">Add a chip</button></div>
-      <p class="err" id="pc-err" role="alert"></p>
-      <div class="stack-btns"><button type="button" class="btn primary" data-a="pc-save">Save these chips</button><button type="button" class="btn" data-a="pc-cancel">Cancel</button></div>`
-      : '<div class="stack-btns"><button type="button" class="btn" data-a="pc-cancel">OK</button></div>'}
-    </div></div>`;
-  },
-  'pc-add': () => {
-    const used = [...document.querySelectorAll('#pc-rows .ce-color')].map(x => x.value), next = CHIP_COLORS.find(c => !used.includes(c[0]));
+  'ps-my': () => openMySets(),
+  'ps-my-new': () => openSetSheet('my'),
+  'ps-my-edit': t => openSetSheet('my', t.dataset.id),
+  'lg-sets': () => openLgSets(),
+  'ps-lg-new': () => openSetSheet('lg'),
+  'ps-lg-edit': t => openSetSheet('lg', t.dataset.id),
+  'ps-add-chip': t => {
+    const box = t.closest('.ce-box'), rows = box.querySelector('#ps-rows');
+    const used = [...rows.querySelectorAll('.ce-color')].map(x => x.value), next = CHIP_COLORS.find(c => !used.includes(c[0]));
     if (!next) return;
-    $('#pc-rows').insertAdjacentHTML('beforeend', ceRowHTML({ c: next[0], v: null }));
-    if (used.length + 1 >= CHIP_COLORS.length) document.querySelector('.pc-edit-box .ce-add-wrap').hidden = true;
-    const r = document.querySelectorAll('#pc-rows .ce-row'); r[r.length - 1].querySelector('.ce-v').focus();
+    rows.insertAdjacentHTML('beforeend', ceRowHTML({ c: next[0], v: null }));
+    if (used.length + 1 >= CHIP_COLORS.length) box.querySelector('.ce-add-wrap').hidden = true;
+    const r = rows.querySelectorAll('.ce-row'); r[r.length - 1].querySelector('.ce-v').focus();
   },
-  'pc-save': () => {
-    const type = ($('#f-type').value || '').trim().replace(/\s+/g, ' '), k = key(type);
-    const got = readChipRows(document.getElementById('pc-rows'));
-    if (got.err) { $('#pc-err').textContent = got.err; return; }
-    const sets = { ...(S.settings.chipSets || {}) };
-    if (got.chips.length) { sets[k] = got.chips; S.settings.chipLast = got.chips; } else delete sets[k];
-    S.settings.chipSets = sets; save();
-    $('#f-cc').innerHTML = sessionCCHTML(type, got.chips.length > 0);
-    toast(got.chips.length ? `Saved your chips for ${type}.` : `Removed your chips for ${type}.`);
+  'ce-del': t => { const box = t.closest('.ce-box') || document; t.closest('.ce-row').remove(); const w = box.querySelector('.ce-add-wrap'); if (w) w.hidden = false; psFail(''); },
+  'ps-sheet-save': async t => {
+    const host = t.dataset.host, id = t.dataset.id, list = host === 'lg' ? lgSets() : mySets();
+    if (!id && list.length >= (host === 'lg' ? MAX_LG_SETS : MAX_MY_SETS)) return psFail('You’ve reached the most sets you can add.');
+    const got = readSet(list, id); if (got.err) return psFail(got.err);
+    const next = id ? list.map(x => x.id === id ? got.set : x) : [...list, got.set];
+    if (host === 'lg') {
+      try { await saveLgSets(next); openLgSets(); toast(`Saved ${got.set.name}.`); } catch (e) { psFail(lgErr(e, 'save the set')); }
+    } else { saveMySets(next); openMySets(); toast(`Saved ${got.set.name}.`); }
   },
-  'pc-cancel': () => { const wrap = $('#f-cc'); if (wrap) wrap.innerHTML = sessionCCHTML(($('#f-type').value || '').trim()); },
+  'ps-sheet-del': async t => {
+    const host = t.dataset.host, id = t.dataset.id, list = host === 'lg' ? lgSets() : mySets(), st = list.find(x => x.id === id);
+    if (!st) return;
+    const next = list.filter(x => x.id !== id);
+    if (host === 'lg') {
+      try {
+        await saveLgSets(next); openLgSets();
+        toast(`Deleted ${st.name}.`, () => saveLgSets(list).then(() => { if (lgSetsOpen()) openLgSets(); toast(`Brought back ${st.name}.`); }).catch(() => toast('Couldn’t bring the set back.')));
+      }
+      catch (e) { psFail(lgErr(e, 'delete the set')); }
+    } else { saveMySets(next); openMySets(); toast(`Deleted ${st.name}.`, () => { saveMySets(list); if ($('.sheet-head h2') && $('.sheet-head h2').textContent === 'My poker sets') openMySets(); }); }
+  },
+  'ps-copy': async t => {
+    const mine = mySets().find(x => x.id === t.dataset.id), list = lgSets(); if (!mine) return;
+    const same = list.find(x => key(x.name) === key(mine.name));
+    if (!same && list.length >= MAX_LG_SETS) return lgFail('The league already has the most sets it can.');
+    const next = same ? list.map(x => x === same ? { ...x, chips: mine.chips } : x) : [...list, { id: uid(), name: mine.name, chips: mine.chips }];
+    try { await saveLgSets(next); openLgSets(); toast(same ? `Updated ${mine.name} to match yours.` : `Added ${mine.name} to ${S.league.name}.`); }
+    catch (e) { lgFail(lgErr(e, 'copy the set')); }
+  },
+  // in the session form
+  'ps-inline-new': () => psInline(null),
+  'ps-inline-edit': t => { const box = t.closest('.cc'); psInline(box ? box.dataset.set : null); },
+  'ps-inline-save': t => {
+    const id = t.dataset.id, list = mySets();
+    if (!id && list.length >= MAX_MY_SETS) return psFail('You’ve reached the most sets you can add.');
+    const got = readSet(list, id); if (got.err) return psFail(got.err);
+    saveMySets(id ? list.map(x => x.id === id ? got.set : x) : [...list, got.set]);
+    const type = ($('#f-type').value || '').trim(); rememberSet(chipSource(type).ctx, got.set.id);
+    $('#f-cc').innerHTML = sessionCCHTML(type, true);
+    toast(`Saved ${got.set.name} to your poker sets.`);
+  },
+  'ps-inline-cancel': () => { const wrap = $('#f-cc'); if (wrap) wrap.innerHTML = sessionCCHTML(($('#f-type').value || '').trim()); },
+  'cc-set': t => {
+    const box = t.closest('.cc'), sets = JSON.parse(box.dataset.sig), st = sets.find(x => x.id === t.dataset.id); if (!st) return;
+    box.dataset.set = st.id; rememberSet(box.dataset.ctx, st.id);
+    box.querySelectorAll('[data-a="cc-set"]').forEach(b => b.setAttribute('aria-pressed', String(b === t)));
+    box.querySelector('.cc-rows').innerHTML = ccRowsHTML(st.chips);
+    box.querySelector('.cc-open .chip-sw').outerHTML = chipSw(st.chips[0].c);
+    ccUpdate(box, false);
+  },
   'cc-toggle': t => {
     const box = t.closest('.cc'), body = box.querySelector('.cc-body'), open = body.hidden;
     body.hidden = !open; t.setAttribute('aria-expanded', String(open));
@@ -3148,24 +3265,17 @@ Object.assign(A, {
     const inp = t.parentElement.querySelector('.cc-n'), n = Math.max(0, Math.min(9999, (parseInt(inp.value, 10) || 0) + Number(t.dataset.d)));
     inp.value = n ? String(n) : ''; ccUpdate(t.closest('.cc'));
   },
-  'ce-add': () => {
-    const used = [...document.querySelectorAll('.ce-color')].map(s => s.value), next = CHIP_COLORS.find(c => !used.includes(c[0]));
-    if (!next) return;
-    $('#ce-rows').insertAdjacentHTML('beforeend', ceRowHTML({ c: next[0], v: null }));
-    if (used.length + 1 >= CHIP_COLORS.length) $('#ce-add-wrap').hidden = true;
-    const rows = document.querySelectorAll('.ce-row'); rows[rows.length - 1].querySelector('.ce-v').focus();
-  },
-  'ce-del': t => { const box = t.closest('.ce-box') || document; t.closest('.ce-row').remove(); const w = box.querySelector('.ce-add-wrap'); if (w) w.hidden = false; lgFail(''); const pe = $('#pc-err'); if (pe) pe.textContent = ''; },
-  'ce-save': async () => {
-    const got = readChipRows(document.getElementById('cef')); if (got.err) return lgFail(got.err);
-    const chips = got.chips, code = S.league.code;
-    try {
-      const be = await lgBackend(); await be.setChips(code, chips);
-      if (LGD.league) LGD.league.chips = chips; S.league.chips = chips; save();
-      closeSheet(); renderLeague(); toast(chips.length ? 'Saved your league’s chips.' : 'Removed your league’s chips.');
-    } catch (e) { lgFail(lgErr(e, 'save the chips')); }
-  },
 });
+// Add or edit one of your sets without leaving the session form.
+function psInline(id) {
+  const wrap = $('#f-cc'); if (!wrap) return;
+  const st = id ? mySets().find(x => x.id === id) : null, n = mySets().length;
+  wrap.innerHTML = `<div class="cc ps-edit ce-box"><div class="cc-body">
+    <p class="small" style="margin:8px 0 10px"><b>${st ? `Edit ${esc(st.name)}` : n ? 'Add a poker set' : 'Add your first poker set'}</b><br><span class="muted">${st ? 'Changes apply wherever you use this set.' : 'Enter the chips in the set you play with. Felt saves it to your poker sets for next time.'}</span></p>
+    ${setEditorHTML(st)}
+    <div class="stack-btns"><button type="button" class="btn primary" data-a="ps-inline-save" data-id="${st ? esc(st.id) : ''}">${st ? 'Save changes' : 'Save this set'}</button><button type="button" class="btn" data-a="ps-inline-cancel">Cancel</button></div>
+  </div></div>`;
+}
 
 /* ---------------- seasons (organizer) ---------------- */
 const seasonCount = x => LGD.results.filter(r => inSeason(r.date, x)).length;
