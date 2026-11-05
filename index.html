@@ -161,6 +161,8 @@ a.btn { text-decoration: none; display: flex; align-items: center; justify-conte
 .cc-label > span:last-child { display: flex; flex-direction: column; min-width: 0; }
 .cc-step { width: 136px; flex: none; grid-template-columns: 42px 1fr 42px; background: var(--sheet); }
 .cc-total { margin: 10px 0 0; }
+.cc-src { margin: 8px 0 0; }
+.cc-edit { margin-top: 8px; font-size: 14px; font-weight: 600; padding: 4px 0; }
 .ce-row { display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 1fr) 40px; gap: 10px; align-items: center; margin-bottom: 10px; }
 .ce-del { border: 0; background: none; font-size: 24px; line-height: 1; color: var(--ink2); min-height: 44px; border-radius: 10px; }
 .ce-del:active { background: var(--press); }
@@ -621,6 +623,13 @@ function ingest(d) {
       if (typeof st.keepAwake === 'boolean') S.settings.keepAwake = st.keepAwake;
       if (st.anView === 'preflop') S.settings.anView = 'preflop';
       if (Number.isInteger(st.players) && st.players >= 3 && st.players <= 10) S.settings.players = st.players;
+      // your own chips for session types that aren't linked to a league, keyed by session type
+      const okCh = l => Array.isArray(l) ? l.filter(x => x && typeof x.c === 'string' && x.c.length <= 12 && Number.isInteger(x.v) && x.v > 0 && x.v <= 10000000).slice(0, 12).map(x => ({ c: x.c, v: x.v })) : [];
+      if (st.chipSets && typeof st.chipSets === 'object') {
+        const o = {}; for (const [k, l] of Object.entries(st.chipSets).slice(0, 40)) { const ch = okCh(l); if (k.length <= 60 && ch.length) o[k] = ch; }
+        S.settings.chipSets = o;
+      }
+      if (okCh(st.chipLast).length) S.settings.chipLast = okCh(st.chipLast);
       const fl = st.filters || {};
       S.settings.filters = { type: typeof fl.type === 'string' ? fl.type : '', start: isISO(fl.start) ? fl.start : '', end: isISO(fl.end) ? fl.end : '' };
     }
@@ -821,7 +830,7 @@ function openSessionForm(id, fromLive = false) {
       <label class="field"><span>Total buy-in</span><div class="money"><i>$</i><input type="text" id="f-buyin" inputmode="decimal" value="${v.buyIn}" placeholder="0.00" enterkeyhint="next"></div></label>
       <label class="field"><span>Ending stack</span><div class="money"><i>$</i><input type="text" id="f-stack" inputmode="decimal" value="${v.stack}" placeholder="0.00" enterkeyhint="done"></div></label>
     </div>
-    <div id="f-cc">${chipCalcHTML(chipsForType(v.type), '#f-stack', 'my')}</div>
+    <div id="f-cc">${sessionCCHTML(v.type)}</div>
     <p class="hint muted small">${L ? (L.buyIns.length ? 'This is the total of the buy-ins you logged. Change it if you missed one.' : 'You didn’t log any buy-ins, so enter your total here.') : 'Add up every buy-in and rebuy from the session.'}</p>
     ${nh ? `<p class="muted small">${nh} hand${nh === 1 ? '' : 's'} ${L ? 'will be saved with this session' : 'were recorded during this session'}.</p>` : ''}
     <label class="field"><span>Notes (optional)</span><textarea id="f-notes" rows="3" maxlength="2000" placeholder="Table dynamics, how you played, anything to remember">${esc(v.notes)}</textarea></label>
@@ -3008,24 +3017,30 @@ const chipSw = k => { const c = chipColor(k); return `<span class="chip-sw" styl
 const cleanChips = list => (Array.isArray(list) ? list : []).filter(x => x && CHIP_COLORS.some(c => c[0] === x.c) && Number.isInteger(x.v) && x.v > 0 && x.v <= MAX_C).sort((a, b) => a.v - b.v).slice(0, 12);
 const lgChips = () => cleanChips(LGD.league && 'chips' in LGD.league ? LGD.league.chips : S.league && S.league.chips);
 const chipSummary = list => `${list.length} chip${list.length === 1 ? '' : 's'}, ${list.length === 1 ? usdC(list[0].v) : `${usdC(list[0].v)} to ${usdC(list[list.length - 1].v)}`}`;
-// For a session: the chips of the league linked to its session type (or the open league, if it isn't linked to a type yet).
-function chipsForType(type) {
-  const k = key(type || ''), hit = k && S.leagues.find(l => l.type && key(l.type) === k && cleanChips(l.chips).length);
-  if (hit) return cleanChips(hit.chips);
-  // a league that isn't linked to any session type yet: offer its chips for any session
-  if (S.league && !S.league.type && cleanChips(S.league.chips).length) return cleanChips(S.league.chips);
-  return [];
+// For a session: a league's chips only when the session type is linked to that league. Otherwise your own chips for that type.
+function chipSource(type) {
+  const k = key(type || ''), lg = k && S.leagues.find(l => l.type && key(l.type) === k && cleanChips(l.chips).length);
+  if (lg) return { chips: cleanChips(lg.chips), league: lg, k };
+  return { chips: cleanChips((S.settings.chipSets || {})[k]), k };
+}
+const chipsForType = type => chipSource(type).chips;
+// The session form's chip counter, with a way to set up or change your own chips.
+function sessionCCHTML(type, open = false) {
+  const src = chipSource(type);
+  if (src.league) return chipCalcHTML(src.chips, '#f-stack', 'my', `<p class="muted small cc-src">These are ${esc(src.league.name)}’s chips.</p>`, open);
+  if (src.chips.length) return chipCalcHTML(src.chips, '#f-stack', 'my', '<button type="button" class="link cc-edit" data-a="pc-edit">Change these chips</button>', open);
+  return `<div class="cc" data-target="#f-stack" data-sig=""><button type="button" class="link cc-open" data-a="pc-edit">${chipSw('white')}Count my chips</button></div>`;
 }
 
 // The chip calculator: count each color, and the total fills in the cash-out or ending stack.
-function chipCalcHTML(chips, target, who = 'my') {
+function chipCalcHTML(chips, target, who = 'my', foot = '', open = false) {
   if (!chips.length) return '';
   return `<div class="cc" data-target="${target}" data-who="${who}" data-sig="${esc(JSON.stringify(chips))}">
-    <button type="button" class="link cc-open" data-a="cc-toggle" aria-expanded="false">${chipSw(chips[0].c)}Count ${who === 'their' ? 'their' : 'my'} chips</button>
-    <div class="cc-body" hidden>
-      ${chips.map((c, i) => { const nm = chipColor(c.c)[1]; return `<div class="cc-row"><span class="cc-label">${chipSw(c.c)}<span><b>${nm}</b><span class="muted small">${usdC(c.v)} each</span></span></span>
+    <button type="button" class="link cc-open" data-a="cc-toggle" aria-expanded="${open}">${chipSw(chips[0].c)}Count ${who === 'their' ? 'their' : 'my'} chips</button>
+    <div class="cc-body"${open ? '' : ' hidden'}>
+      ${chips.map(c => { const nm = usdC(c.v); return `<div class="cc-row"><span class="cc-label">${chipSw(c.c)}<span><b>${nm}</b><span class="muted small">chips</span></span></span>
         <div class="stepper cc-step"><button type="button" data-a="cc-step" data-d="-1" aria-label="One fewer ${nm} chip">−</button><input type="text" class="cc-n" inputmode="numeric" maxlength="4" data-v="${c.v}" placeholder="0" aria-label="Number of ${nm} chips"><button type="button" data-a="cc-step" data-d="1" aria-label="One more ${nm} chip">+</button></div></div>`; }).join('')}
-      <p class="cc-total" aria-live="polite"></p>
+      <p class="cc-total" aria-live="polite">${open ? `<span class="muted">Enter how many of each chip you have.</span>` : ''}</p>${foot}
     </div></div>`;
 }
 function ccUpdate(box, write = true) {
@@ -3042,7 +3057,8 @@ function ccRetarget(type) {
   const wrap = $('#f-cc'); if (!wrap) return;
   const box = wrap.querySelector('.cc'), chips = chipsForType(type);
   if (box && [...box.querySelectorAll('.cc-n')].some(i => i.value)) return;
-  if ((box ? box.dataset.sig : '') !== (chips.length ? JSON.stringify(chips) : '')) wrap.innerHTML = chipCalcHTML(chips, '#f-stack', 'my');
+  if (wrap.querySelector('.pc-edit-box')) return;   // leave the chip editor alone while it's open
+  if (!box || box.dataset.sig !== (chips.length ? JSON.stringify(chips) : '') || !!chipSource(type).league !== !!box.querySelector('.cc-src')) wrap.innerHTML = sessionCCHTML(type);
 }
 document.addEventListener('input', e => {
   if (!e.target.classList || !e.target.classList.contains('cc-n')) return;
@@ -3057,21 +3073,72 @@ function openChips() {
     <div class="chip-list">${list.map(c => `<div><span>${chipSw(c.c)}<b>${chipColor(c.c)[1]}</b></span><span>${usdC(c.v)}</span></div>`).join('')}</div></div>`);
   const rows = list.length ? list : [{ c: 'white', v: null }];
   openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Chips</h2><button class="link strong" data-a="ce-save">Save</button></div>
-  <div class="sheet-body"><form id="cef" novalidate>
+  <div class="sheet-body"><form id="cef" class="ce-box" novalidate>
     <p class="muted small" style="margin-top:0">Set the chips your league plays with. Then anyone adding a result can count their chips, and Felt works out the total.</p>
     <div class="ce-head muted small" style="display:grid;grid-template-columns:26px minmax(0,1.2fr) minmax(0,1fr) 40px;gap:10px;margin-bottom:6px"><span></span><span>Color</span><span>Value</span><span></span></div>
     <div id="ce-rows">${rows.map(ceRowHTML).join('')}</div>
-    <div class="stack-btns" id="ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ce-add">Add a chip</button></div>
+    <div class="stack-btns ce-add-wrap" id="ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ce-add">Add a chip</button></div>
     <p class="err" id="lg-err" role="alert"></p>
   </form></div>`, { backdropCloses: false });
+}
+// Read the chip rows in an editor: { chips } or { err } with a message to show.
+function readChipRows(root) {
+  const list = [], seen = new Set();
+  for (const row of root.querySelectorAll('.ce-row')) {
+    const c = row.querySelector('.ce-color').value, raw = row.querySelector('.ce-v').value.trim(), nm = chipColor(c)[1];
+    if (!raw) return { err: `Enter a value for the ${nm} chip, or remove it.` };
+    const v = parseMoney(raw);
+    if (v == null || v <= 0) return { err: `Enter a value for the ${nm} chip, like 0.25 or 5.` };
+    if (v > MAX_C) return { err: 'Chip values over $100,000 aren’t supported.' };
+    if (seen.has(c)) return { err: `You have two ${nm} chips. Pick a different color for one of them.` };
+    seen.add(c); list.push({ c, v });
+  }
+  return { chips: cleanChips(list) };
 }
 const ceRowHTML = x => `<div class="ce-row">${chipSw(x.c)}<div class="select"><select class="ce-color" aria-label="Chip color">${CHIP_COLORS.map(c => `<option value="${c[0]}"${c[0] === x.c ? ' selected' : ''}>${c[1]}</option>`).join('')}</select></div><div class="money"><i>$</i><input type="text" class="ce-v" inputmode="decimal" value="${x.v ? (x.v / 100).toFixed(2) : ''}" placeholder="0.25" aria-label="Chip value"></div><button type="button" class="ce-del" data-a="ce-del" aria-label="Remove this chip">×</button></div>`;
 document.addEventListener('change', e => {
   if (e.target.classList && e.target.classList.contains('ce-color')) { const row = e.target.closest('.ce-row'); row.querySelector('.chip-sw').outerHTML = chipSw(e.target.value); lgFail(''); }
 });
-document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#cef')) lgFail(''); });
+document.addEventListener('input', e => {
+  if (!e.target.closest) return;
+  if (e.target.closest('#cef')) lgFail('');
+  if (e.target.closest('.pc-edit-box')) { const pe = $('#pc-err'); if (pe) pe.textContent = ''; }   // a fix clears the last message
+});
 Object.assign(A, {
   'lg-chips': () => openChips(),
+  'pc-edit': () => {
+    const wrap = $('#f-cc'); if (!wrap) return;
+    const type = ($('#f-type').value || '').trim().replace(/\s+/g, ' '), src = chipSource(type);
+    const start = src.chips.length ? src.chips : cleanChips(S.settings.chipLast);
+    const rows = start.length ? start : [{ c: 'white', v: null }];
+    wrap.innerHTML = `<div class="cc pc-edit-box ce-box"><div class="cc-body">
+      <p class="small" style="margin:8px 0 10px">${type ? `<b>Your chips for ${esc(type)}</b><br><span class="muted">Felt remembers these for your next ${esc(type)} session. They don’t change any league’s chips.</span>` : '<span class="muted">Choose a session type first, so Felt can remember these chips for it.</span>'}</p>
+      ${type ? `<div class="muted small" style="display:grid;grid-template-columns:26px minmax(0,1.2fr) minmax(0,1fr) 40px;gap:10px;margin-bottom:6px"><span></span><span>Color</span><span>Value</span><span></span></div>
+      <div id="pc-rows">${rows.map(ceRowHTML).join('')}</div>
+      <div class="stack-btns ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="pc-add">Add a chip</button></div>
+      <p class="err" id="pc-err" role="alert"></p>
+      <div class="stack-btns"><button type="button" class="btn primary" data-a="pc-save">Save these chips</button><button type="button" class="btn" data-a="pc-cancel">Cancel</button></div>`
+      : '<div class="stack-btns"><button type="button" class="btn" data-a="pc-cancel">OK</button></div>'}
+    </div></div>`;
+  },
+  'pc-add': () => {
+    const used = [...document.querySelectorAll('#pc-rows .ce-color')].map(x => x.value), next = CHIP_COLORS.find(c => !used.includes(c[0]));
+    if (!next) return;
+    $('#pc-rows').insertAdjacentHTML('beforeend', ceRowHTML({ c: next[0], v: null }));
+    if (used.length + 1 >= CHIP_COLORS.length) document.querySelector('.pc-edit-box .ce-add-wrap').hidden = true;
+    const r = document.querySelectorAll('#pc-rows .ce-row'); r[r.length - 1].querySelector('.ce-v').focus();
+  },
+  'pc-save': () => {
+    const type = ($('#f-type').value || '').trim().replace(/\s+/g, ' '), k = key(type);
+    const got = readChipRows(document.getElementById('pc-rows'));
+    if (got.err) { $('#pc-err').textContent = got.err; return; }
+    const sets = { ...(S.settings.chipSets || {}) };
+    if (got.chips.length) { sets[k] = got.chips; S.settings.chipLast = got.chips; } else delete sets[k];
+    S.settings.chipSets = sets; save();
+    $('#f-cc').innerHTML = sessionCCHTML(type, got.chips.length > 0);
+    toast(got.chips.length ? `Saved your chips for ${type}.` : `Removed your chips for ${type}.`);
+  },
+  'pc-cancel': () => { const wrap = $('#f-cc'); if (wrap) wrap.innerHTML = sessionCCHTML(($('#f-type').value || '').trim()); },
   'cc-toggle': t => {
     const box = t.closest('.cc'), body = box.querySelector('.cc-body'), open = body.hidden;
     body.hidden = !open; t.setAttribute('aria-expanded', String(open));
@@ -3088,19 +3155,10 @@ Object.assign(A, {
     if (used.length + 1 >= CHIP_COLORS.length) $('#ce-add-wrap').hidden = true;
     const rows = document.querySelectorAll('.ce-row'); rows[rows.length - 1].querySelector('.ce-v').focus();
   },
-  'ce-del': t => { t.closest('.ce-row').remove(); $('#ce-add-wrap').hidden = false; lgFail(''); },
+  'ce-del': t => { const box = t.closest('.ce-box') || document; t.closest('.ce-row').remove(); const w = box.querySelector('.ce-add-wrap'); if (w) w.hidden = false; lgFail(''); const pe = $('#pc-err'); if (pe) pe.textContent = ''; },
   'ce-save': async () => {
-    const list = [], seen = new Set();
-    for (const row of document.querySelectorAll('.ce-row')) {
-      const c = row.querySelector('.ce-color').value, raw = row.querySelector('.ce-v').value.trim(), nm = chipColor(c)[1];
-      if (!raw) return lgFail(`Enter a value for the ${nm} chip, or remove it.`);
-      const v = parseMoney(raw);
-      if (v == null || v <= 0) return lgFail(`Enter a value for the ${nm} chip, like 0.25 or 5.`);
-      if (v > MAX_C) return lgFail('Chip values over $100,000 aren’t supported.');
-      if (seen.has(c)) return lgFail(`You have two ${nm} chips. Pick a different color for one of them.`);
-      seen.add(c); list.push({ c, v });
-    }
-    const chips = cleanChips(list), code = S.league.code;
+    const got = readChipRows(document.getElementById('cef')); if (got.err) return lgFail(got.err);
+    const chips = got.chips, code = S.league.code;
     try {
       const be = await lgBackend(); await be.setChips(code, chips);
       if (LGD.league) LGD.league.chips = chips; S.league.chips = chips; save();
