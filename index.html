@@ -3112,7 +3112,7 @@ function ccRetarget(type) {
 const ceRowHTML = x => `<div class="ce-row">${chipSw(x.c)}<div class="select"><select class="ce-color" aria-label="Chip color">${CHIP_COLORS.map(c => `<option value="${c[0]}"${c[0] === x.c ? ' selected' : ''}>${c[1]}</option>`).join('')}</select></div><div class="money"><i>$</i><input type="text" class="ce-v" inputmode="decimal" value="${x.v ? (x.v / 100).toFixed(2) : ''}" placeholder="0.25" aria-label="Chip value"></div><button type="button" class="ce-del" data-a="ce-del" aria-label="Remove this chip">×</button></div>`;
 function setEditorHTML(st) {
   const rows = st && st.chips.length ? st.chips : [{ c: 'white', v: null }];
-  return `<label class="field"><span>Set name</span><input type="text" id="ps-name" value="${st ? esc(st.name) : ''}" placeholder="Like Viper’s set" maxlength="32" autocapitalize="words" autocomplete="off"></label>
+  return `<label class="field"><span>Set name</span><input type="text" id="ps-title" value="${st ? esc(st.name) : ''}" placeholder="Like Viper’s set" maxlength="32" autocapitalize="sentences" autocomplete="off" autocorrect="off" spellcheck="false"></label>
     <div class="muted small ce-head"><span></span><span>Chip color</span><span>Value</span><span></span></div>
     <div id="ps-rows">${rows.map(ceRowHTML).join('')}</div>
     <div class="stack-btns ce-add-wrap"${rows.length >= CHIP_COLORS.length ? ' hidden' : ''}><button type="button" class="btn" data-a="ps-add-chip">Add a chip</button></div>
@@ -3135,7 +3135,7 @@ function readChipRows(root) {
 }
 // Read the open editor into a set, checking its name against the other sets in the same list.
 function readSet(list, id) {
-  const name = ($('#ps-name').value || '').trim().replace(/\s+/g, ' ');
+  const name = ($('#ps-title').value || '').trim().replace(/\s+/g, ' ');
   if (!name) return { err: 'Give this set a name, like Viper’s set.' };
   if (list.some(x => x.id !== id && key(x.name) === key(name))) return { err: `You already have a set called ${name}. Pick another name.` };
   const got = readChipRows($('#ps-rows')); if (got.err) return got;
