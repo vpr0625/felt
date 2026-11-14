@@ -1277,7 +1277,8 @@ function signedSeries(F, pts, label) {
 
 // Tap or drag across a dated chart to read individual points.
 function inspectTime(fig, pts, F, describe, colorOf = p => p.v < 0 ? 'neg-s' : 'pos-s') {
-  const svg = fig.querySelector('svg'), hov = svg.querySelector('.hov'), out = fig.querySelector('.readout');
+  // the chart's own picture (the figure can also hold other icons, like the Save image button's)
+  const svg = fig.querySelector('.chart > svg'), hov = svg.querySelector('.hov'), out = fig.querySelector('.readout');
   const px = pts.map(p => F.x(p.t));
   out.innerHTML = fig.classList.contains('compact') ? 'Tap or drag the chart for details.' : 'Tap or drag across the chart to see individual sessions.';
   const show = e => {
