@@ -166,6 +166,7 @@ a.btn { text-decoration: none; display: flex; align-items: center; justify-conte
 .cy-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 44px minmax(0, 1fr) 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .cy-sign { min-height: 44px; border-radius: 12px; border: 1px solid var(--fieldline); background: var(--field); font-size: 22px; font-weight: 700; line-height: 1; }
 .cy-sign.pos { color: var(--win-t); } .cy-sign.neg { color: var(--loss-t); }
+.cye-row { grid-template-columns: 44px minmax(0, 1fr); }
 .cy-paste { margin: 6px 0 4px; }
 .cy-paste summary { font-weight: 600; padding: 8px 0; cursor: pointer; }
 .cy-paste textarea { width: 100%; box-sizing: border-box; }
@@ -2663,9 +2664,61 @@ function openCarryResult(r) {
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(pName(r))}</h2><button class="link strong" data-a="close">Done</button></div>
   <div class="sheet-body"><div class="muted small">Carried-over total as of ${fmtDate(r.date)}</div>
     <div class="live-stats det-stats"><div class="ls"><span class="ls-l">Total</span><span class="ls-v ${signCls(lgNet(r) / 100)}">${usdC(lgNet(r), true)}</span></div></div>
-    ${organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this total</button></div>` : ''}
+    ${organizer ? `<div class="stack-btns">${r.uid === LGD.uid ? `<button class="btn" data-a="cy-edit" data-id="${esc(r.id)}">Edit this total</button>` : ''}<button class="btn danger" data-a="cy-remove" data-id="${esc(r.id)}">Remove this total</button></div>` : ''}
   </div>`);
 }
+// Edit one carried-over total: its amount, its date (optionally for every total with the same date), and the name unless it's linked to a member.
+function openCarryEdit(r) {
+  const net = lgNet(r), neg = net < 0, mem = forMember(r);
+  const others = LGD.results.filter(x => isCarry(x) && x.id !== r.id && x.date === r.date && x.uid === LGD.uid).length;
+  openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Edit total</h2><button class="link strong" data-a="cy-edit-save" data-id="${esc(r.id)}">Save</button></div>
+  <div class="sheet-body"><form id="cyef" novalidate>
+    ${mem ? `<p class="small" style="margin-top:0"><b>${esc(mem.name)}</b></p>`
+      : `<label class="field"><span>Player</span><input type="search" id="cye-name" list="cy-names" value="${esc(r.player)}" maxlength="24" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false"></label>
+         <datalist id="cy-names">${carryNames().map(x => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>`}
+    <div class="field"><span id="l-cye">Total</span><div class="cy-row cye-row" role="group" aria-labelledby="l-cye">
+      <button type="button" class="cy-sign ${neg ? 'neg' : 'pos'}" data-a="cy-sign" aria-label="${neg ? 'Lost. Tap to make it a win' : 'Won. Tap to make it a loss'}">${neg ? '−' : '+'}</button>
+      <div class="money"><i>$</i><input type="text" id="cye-amt" inputmode="decimal" value="${(Math.abs(net) / 100).toFixed(2)}" aria-label="Total"></div></div></div>
+    <label class="field"><span>As of</span><input type="date" id="cye-date" value="${r.date}"></label>
+    ${others ? `<label class="switch"><input type="checkbox" id="cye-all" checked><span><b>Change the date for all ${others + 1} totals</b><br><span class="muted small">If you change the date, the other totals as of ${fmtDate(r.date)} move too.</span></span></label>` : ''}
+    <p class="err" id="lg-err" role="alert"></p>
+  </form></div>`, { backdropCloses: false });
+}
+document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#cyef')) lgFail(''); });
+Object.assign(A, {
+  'cy-edit': t => { const r = LGD.results.find(x => x.id === t.dataset.id); if (r) openCarryEdit(r); },
+  'cy-edit-save': async t => {
+    const r = LGD.results.find(x => x.id === t.dataset.id); if (!r) return closeSheet();
+    const date = $('#cye-date').value, c = parseMoney(($('#cye-amt').value || '').trim()), nameEl = $('#cye-name');
+    if (!isISO(date)) return lgFail('Enter the date this total is as of.');
+    if (c == null) return lgFail('Enter the total as a number, like 281 or 206.25.');
+    if (c > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
+    const neg = document.querySelector('#cyef .cy-sign').classList.contains('neg');
+    const upd = { buyIn: neg ? c : 0, cashOut: neg ? 0 : c, date };
+    if (nameEl) {
+      const raw = nameEl.value.trim().replace(/\s+/g, ' '); if (!raw) return lgFail('Enter the player’s name.');
+      const pick = carryPick(raw); upd.player = pick ? pick.name : raw;
+    }
+    const moveAll = date !== r.date && $('#cye-all') && $('#cye-all').checked;
+    const others = moveAll ? LGD.results.filter(x => isCarry(x) && x.id !== r.id && x.date === r.date && x.uid === LGD.uid) : [];
+    const code = S.league.code, who = upd.player || pName(r);
+    lgFail('Saving…');
+    try {
+      const be = await lgBackend();
+      await be.updateResult(code, r.id, upd);
+      for (const x of others) await be.updateResult(code, x.id, { date });
+      closeSheet(); renderLeague(); toast(others.length ? `Saved ${who}’s total and moved ${others.length + 1} totals to ${fmtDate(date)}.` : `Saved ${who}’s total.`);
+    } catch (e) { lgFail(lgErr(e, 'save the total')); }
+  },
+  'cy-remove': t => {
+    const r = LGD.results.find(x => x.id === t.dataset.id); if (!r) return closeSheet();
+    const code = S.league.code, back = { date: r.date, player: r.player, buyIn: r.buyIn, cashOut: r.cashOut, imported: true, added: true, carry: true };
+    if (r.forUid) back.forUid = r.forUid;
+    closeSheet();
+    lgWrite(be => be.deleteResult(code, r.id));
+    toast(`Removed ${pName(r)}’s total.`, () => lgWrite(be => be.addResult(code, back), `Brought back ${pName(r)}’s total.`));
+  },
+});
 function openPlayer(name) {
   const list = lgRes().filter(r => key(pName(r)) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(name)}</h2><button class="link strong" data-a="close">Done</button></div>
@@ -2780,7 +2833,24 @@ Object.assign(A, {
   'lg-result': t => openResult(t.dataset.id),
   'lg-player': t => openPlayer(t.dataset.name),
   'lg-edit': t => openResultForm(LGD.results.find(x => x.id === t.dataset.id)),
-  'lg-del': t => { const code = S.league.code, id = t.dataset.id; closeSheet(); lgWrite(be => be.deleteResult(code, id), 'Result deleted.'); },
+  // Deleting a result: one you added comes back with Undo. Someone else's (or one with reactions, which can't be
+  // brought back) asks first, since adding it again would make it yours.
+  'lg-del': t => {
+    const r = LGD.results.find(x => x.id === t.dataset.id); if (!r) return closeSheet();
+    const code = S.league.code, nrx = Object.keys(r.reactions || {}).length, whose = isMine(r) ? 'your' : `${pName(r)}’s`;
+    if (r.uid === LGD.uid && !nrx) {
+      const back = {}; for (const [k, v] of Object.entries(r)) if (!['id', 'uid', 'reactions', 'createdAt'].includes(k)) back[k] = v;
+      closeSheet(); lgWrite(be => be.deleteResult(code, r.id));
+      toast(`Deleted ${whose} result from ${fmtDate(r.date)}.`, () => lgWrite(be => be.addResult(code, back), `Brought back ${whose} result.`));
+      return;
+    }
+    const other = r.uid !== LGD.uid, adder = reactorName(r.uid);
+    openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Remove result</h2><span></span></div>
+      <div class="sheet-body"><p style="margin-top:0">Remove ${esc(whose)} result from <b>${fmtDate(r.date)}</b> <span class="nw">(${moneyHTML(lgNet(r) / 100)})?</span></p>
+        <p class="muted small">${other ? `${esc(adder)} added it, so only they can add it again. ` : ''}${nrx ? `Its ${nrx} reaction${nrx === 1 ? '' : 's'} will be removed too. ` : ''}This can’t be undone.</p>
+        <div class="stack-btns"><button class="btn danger" data-a="lg-del-go" data-id="${esc(r.id)}">Remove this result</button><button class="btn" data-a="close">Keep it</button></div></div>`);
+  },
+  'lg-del-go': t => { const code = S.league.code, id = t.dataset.id; closeSheet(); lgWrite(be => be.deleteResult(code, id), 'Result removed.'); },
   'lg-rejoin': async () => {
     try { const be = await lgBackend(); await be.setMember(S.league.code, S.league.player); LGD.rejoin = false; lgStart(); renderLeague(); toast(`You’re back in ${S.league.name}.`); }
     catch (e) { toast('Couldn’t rejoin right now. Check your connection and try again.'); }
