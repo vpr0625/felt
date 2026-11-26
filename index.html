@@ -162,6 +162,13 @@ a.btn { text-decoration: none; display: flex; align-items: center; justify-conte
 .cc-step { width: 136px; flex: none; grid-template-columns: 42px 1fr 42px; background: var(--sheet); }
 .cc-total { margin: 10px 0 0; }
 .cc-src { margin: 8px 0 0; }
+/* carried-over totals */
+.cy-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 44px minmax(0, 1fr) 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cy-sign { min-height: 44px; border-radius: 12px; border: 1px solid var(--fieldline); background: var(--field); font-size: 22px; font-weight: 700; line-height: 1; }
+.cy-sign.pos { color: var(--win-t); } .cy-sign.neg { color: var(--loss-t); }
+.cy-paste { margin: 6px 0 4px; }
+.cy-paste summary { font-weight: 600; padding: 8px 0; cursor: pointer; }
+.cy-paste textarea { width: 100%; box-sizing: border-box; }
 .cc-lbl { margin: 10px 0 8px; }
 .cc-sets { margin-bottom: 4px; }
 .cc-links { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; }
@@ -2334,6 +2341,10 @@ function curSeasonId() {
 const curSeason = () => { const id = curSeasonId(); return id === 'all' ? null : lgSeasons().find(x => x.id === id) || null; };
 // Results shown in standings, game nights and charts: the chosen season, or everything for All time.
 const lgRes = () => { const x = curSeason(); return x ? LGD.results.filter(r => inSeason(r.date, x)) : LGD.results; };
+// A carried-over total is a player's total from a ledger with no breakdown by game night.
+// It counts toward standings, net winnings and profit over time, but isn't a game night: no night count, average,
+// best night, session spread, reactions or $0 check.
+const isCarry = r => !!(r && r.carry);
 const isMine = r => r.uid === LGD.uid && !r.imported;   // imported history isn't yours, even though you added it
 // Claims link an imported name (like "Jackson") to a member, so that history shows under the member's current name.
 function lgClaimMap() {
@@ -2367,8 +2378,9 @@ const myClaims = () => { const me = LGD.members.find(m => m.id === LGD.uid); ret
 function lgStandings() {
   const m = new Map();
   for (const r of lgRes()) {
-    const nm = pName(r) || '?', k = key(nm), e = m.get(k) || { name: nm, n: 0, total: 0, best: -Infinity, wins: 0 };
-    e.name = nm; e.n++; e.total += lgNet(r); e.best = Math.max(e.best, lgNet(r)); if (lgNet(r) > 0) e.wins++;
+    const nm = pName(r) || '?', k = key(nm), e = m.get(k) || { name: nm, n: 0, total: 0, nightTotal: 0, best: -Infinity, wins: 0 };
+    e.name = nm; e.total += lgNet(r);
+    if (!isCarry(r)) { e.n++; e.nightTotal += lgNet(r); e.best = Math.max(e.best, lgNet(r)); if (lgNet(r) > 0) e.wins++; }
     m.set(k, e);
   }
   return [...m.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
@@ -2443,20 +2455,25 @@ function leagueHTML() {
     ${st.length > 3 ? `<div class="stack-btns" style="margin-top:10px"><button class="btn" data-a="lg-all">See all ${st.length} players</button></div>` : ''}
     <p class="muted small">Ranked by total profit/loss ${cs ? `in ${esc(cs.name)}` : 'across every game night'}. Tap a player to see their results.</p>` + lgChartsHTML();
   } else {
-    const nights = new Map();
-    for (const r of lgRes()) { if (!nights.has(r.date)) nights.set(r.date, []); nights.get(r.date).push(r); }
+    const nights = new Map(), carry = new Map();
+    for (const r of lgRes()) { const g = isCarry(r) ? carry : nights; if (!g.has(r.date)) g.set(r.date, []); g.get(r.date).push(r); }
     for (const d of [...nights.keys()].sort().reverse()) {
       const list = nights.get(d).sort((a, b) => lgNet(b) - lgNet(a)), sum = list.reduce((a, r) => a + lgNet(r), 0);
       h += `<section class="night"><h2><span>${fmtDate(d)}</span><span class="muted small">${list.length} player${list.length === 1 ? '' : 's'}</span></h2>
         <table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td><div class="ty">${esc(pName(r))}${isMineOrClaimed(r) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table>
         ${list.length > 1 ? (sum === 0 ? `<p class="muted small zs">Everyone’s results add up to $0.00.</p>` : `<p class="small zs warn-text">Results add up to ${usdC(sum, true)}, not $0. Someone may have a typo, or not everyone has added their result yet.</p>`) : ''}</section>`;
     }
-    h += `<p class="muted small">Tap a result to react to it.</p>`;
+    for (const d of [...carry.keys()].sort().reverse()) {
+      const list = carry.get(d).sort((a, b) => lgNet(b) - lgNet(a));
+      h += `<section class="night carry"><h2><span>Carried-over totals</span><span class="muted small">As of ${fmtDate(d)}</span></h2>
+        <table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td><div class="ty">${esc(pName(r))}${isMineOrClaimed(r) ? ' <span class="tag">You</span>' : ''}</div></td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table></section>`;
+    }
+    if (nights.size) h += `<p class="muted small">Tap a result to react to it.</p>`;
   }
   return h;
 }
 const STANDINGS_HEAD = `<tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" class="num">Nights</th><th scope="col" class="num">Total</th></tr>`;
-function standingRow(p, i, lg) { return `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div><div class="sub">Average <span class="nw">${usdC(p.total / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div></td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`; }
+function standingRow(p, i, lg) { return `<tr data-a="lg-player" data-name="${esc(p.name)}" tabindex="0"><td class="rank">${i + 1}</td><td><div class="ty">${esc(p.name)}${key(p.name) === key(lg.player) ? ' <span class="tag">You</span>' : ''}</div>${p.n ? `<div class="sub">Average <span class="nw">${usdC(p.nightTotal / p.n, true)}</span>, best <span class="nw">${usdC(p.best, true)}</span></div>` : ''}</td><td class="num">${p.n}</td><td class="num">${moneyHTML(p.total / 100)}</td></tr>`; }
 function openAllStandings() {
   const st = lgStandings(), lg = S.league;
   openSheet(`<div class="sheet-head"><span></span><h2>${curSeason() ? esc(curSeason().name) : 'All-time standings'}</h2><button class="link strong" data-a="close">Done</button></div>
@@ -2488,6 +2505,7 @@ function openLeagueOptions() {
     </div>
     ${org ? `<h3>Organizer</h3><div class="opt-list">
       ${row('lg-for-open', 'Add a result for someone', 'For a player who forgot to add theirs')}
+      ${row('lg-carry-open', 'Add carried-over totals', 'Players’ totals without a breakdown by game night')}
       ${row('lg-imp-open', 'Import past results', 'Bring in results from a CSV file')}
       ${LGD.results.some(csvImportedByMe) ? row('lg-imp-clear', 'Delete imported results', '', 'danger') : ''}
     </div>` : ''}
@@ -2612,7 +2630,7 @@ Object.assign(A, {
     if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
     const pick = lgForNames().find(x => key(x.name) === key(raw)), name = pick ? pick.name : raw;
     const dk = date + '|' + key(name);
-    if (lgDupOk !== dk && LGD.results.some(r => r.date === date && key(pName(r)) === key(name))) { lgDupOk = dk; return lgFail(`${name} already has a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
+    if (lgDupOk !== dk && LGD.results.some(r => r.date === date && !isCarry(r) && key(pName(r)) === key(name))) { lgDupOk = dk; return lgFail(`${name} already has a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
     const rec = { date, buyIn, cashOut, player: name, imported: true, added: true };
     if (pick && pick.mem) rec.forUid = pick.mem.id;
     const code = S.league.code;
@@ -2622,6 +2640,7 @@ Object.assign(A, {
 });
 function openResult(id) {
   const r = LGD.results.find(x => x.id === id); if (!r) return;
+  if (isCarry(r)) return openCarryResult(r);
   const mine = isMine(r), organizer = LGD.league && LGD.league.createdBy === LGD.uid, importedByMe = r.imported && r.uid === LGD.uid;
   const entries = Object.entries(r.reactions || {}), mineV = (r.reactions || {})[LGD.uid];
   const who = entries.filter(([, e]) => REACTIONS.includes(e)).map(([u, e]) => `${e} ${esc(reactorName(u))}`);
@@ -2639,6 +2658,14 @@ function openResult(id) {
       : r.added ? `<p class="muted small">${esc(reactorName(r.uid))} added this result${r.forUid === LGD.uid ? ' for you' : ''}.</p>` : ''}
   </div>`);
 }
+function openCarryResult(r) {
+  const organizer = LGD.league && LGD.league.createdBy === LGD.uid;
+  openSheet(`<div class="sheet-head"><span></span><h2>${esc(pName(r))}</h2><button class="link strong" data-a="close">Done</button></div>
+  <div class="sheet-body"><div class="muted small">Carried-over total as of ${fmtDate(r.date)}</div>
+    <div class="live-stats det-stats"><div class="ls"><span class="ls-l">Total</span><span class="ls-v ${signCls(lgNet(r) / 100)}">${usdC(lgNet(r), true)}</span></div></div>
+    ${organizer ? `<div class="stack-btns"><button class="btn danger" data-a="lg-del" data-id="${esc(r.id)}">Remove this total</button></div>` : ''}
+  </div>`);
+}
 function openPlayer(name) {
   const list = lgRes().filter(r => key(pName(r)) === key(name)).sort((a, b) => a.date < b.date ? 1 : -1);
   openSheet(`<div class="sheet-head"><span></span><h2>${esc(name)}</h2><button class="link strong" data-a="close">Done</button></div>
@@ -2648,7 +2675,7 @@ function openPlayer(name) {
       const names = cl.map(c => (LGD.results.find(r => r.imported && key(r.player) === c) || { player: c }).player);
       const org = LGD.league && LGD.league.createdBy === LGD.uid && mem.id !== LGD.uid;
       return `<p class="muted small" style="margin-top:0">Includes imported results under ${names.map(n => `<b>${esc(n)}</b>`).join(', ')}.</p>${org ? `<div class="stack-btns" style="margin:0 0 14px">${cl.map((c, i) => `<button class="btn" data-a="lg-unclaim" data-uid="${esc(mem.id)}" data-k="${esc(c)}">Unlink ${esc(names[i])}</button>`).join('')}</div>` : ''}`;
-    })()}<table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td class="date">${fmtDate(r.date, false)}</td><td><div class="sub">In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}</div>${reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table></div>`);
+    })()}<table class="bt list"><tbody>${list.map(r => `<tr data-a="lg-result" data-id="${esc(r.id)}" tabindex="0"><td class="date">${fmtDate(r.date, false)}</td><td><div class="sub">${isCarry(r) ? 'Carried-over total' : `In ${usdC(r.buyIn)}, out ${usdC(r.cashOut)}`}</div>${isCarry(r) ? '' : reactionChips(r)}</td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table></div>`);
 }
 async function postLeagueResult(date, buyIn, cashOut, lg = S.league) {
   const be = await lgBackend();
@@ -2727,7 +2754,7 @@ Object.assign(A, {
     if (cashOut == null) return lgFail('Enter how much you cashed out. Enter 0 if you lost it all.');
     if (buyIn > MAX_C || cashOut > MAX_C) return lgFail('Amounts over $100,000 aren’t supported.');
     if (!lgEditing && lgDupOk !== date) {
-      const dup = LGD.results.find(r => (isMine(r) || r.forUid === LGD.uid) && r.date === date);
+      const dup = LGD.results.find(r => (isMine(r) || r.forUid === LGD.uid) && r.date === date && !isCarry(r));
       if (dup) { lgDupOk = date; return lgFail(isMine(dup) ? `You already added a result for ${fmtDate(date)}. Tap Save again if this is a second game that night.` : `${reactorName(dup.uid)} already added a result for you on ${fmtDate(date)}. Tap Save again if this is a second game that night.`); }
     }
     const also = !lgEditing && $('#lg-also') && $('#lg-also').checked;
@@ -2808,7 +2835,7 @@ Object.assign(A, {
   'lg-left-clear': () => { S.leftLeagues = []; save(); renderLeague(); },
   'lg-forget': () => { S.league = null; save(); lgStart(); renderLeague(); toast('Removed from this phone.'); },
   'lg-delete': () => {
-    const lg = S.league, nights = new Set(LGD.results.map(r => r.date)).size;
+    const lg = S.league, nights = new Set(LGD.results.filter(r => !isCarry(r)).map(r => r.date)).size;
     openSheet(`<div class="sheet-head"><button class="link" data-a="close">Cancel</button><h2>Delete league</h2><span></span></div>
     <div class="sheet-body"><p>This permanently deletes <b>${esc(lg.name)}</b> for everyone: ${LGD.results.length} result${LGD.results.length === 1 ? '' : 's'} from ${nights} game night${nights === 1 ? '' : 's'}, all reactions, and its ${LGD.members.length} member${LGD.members.length === 1 ? '' : 's'}. This can’t be undone.</p>
     <label class="field"><span>Type the league name to confirm</span><input type="text" id="lg-del-name" autocomplete="off" autocapitalize="off" placeholder="${esc(lg.name)}"></label>
@@ -3379,7 +3406,7 @@ function toSessPlan(type) {
   const k = key(type || ''), used = new Set(), add = [];
   const have = S.sessions.filter(s => !s.sample);
   let already = 0;
-  for (const r of LGD.results.filter(isMineOrClaimed).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) {
+  for (const r of LGD.results.filter(r => isMineOrClaimed(r) && !isCarry(r)).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) {
     // a session on the same night with the same amounts (any type), or with this type, is already this result
     const hit = have.find(s => !used.has(s.id) && s.date === r.date && s.buyIn === r.buyIn && s.stack === r.cashOut)
       || (k && have.find(s => !used.has(s.id) && s.date === r.date && key(s.type) === k));
@@ -3424,6 +3451,149 @@ Object.assign(A, {
     if (!S.league.type) S.league.type = type;   // link the league to this session type, like Also save as a session does
     save(); closeSheet(); render();
     toast(`Added ${add.length} ${type} session${add.length === 1 ? '' : 's'}.`, () => restore(snap));
+  },
+});
+
+/* ---------------- carried-over totals (organizer) ---------------- */
+// Names to pick from: every member (you too), then past players. A member's total is linked to them, so it follows their name.
+function carryNames() {
+  const mem = new Map(), past = new Map(), byName = (a, b) => a.name.localeCompare(b.name);
+  for (const m of LGD.members) { const k = key(m.name || ''); if (k && !mem.has(k)) mem.set(k, { name: m.name, mem: m }); }
+  for (const r of LGD.results) { const n = pName(r), k = key(n || ''); if (k && !mem.has(k) && !past.has(k)) past.set(k, { name: n }); }
+  return [...[...mem.values()].sort(byName), ...[...past.values()].sort(byName)];
+}
+const looseKey = n => key(n || '').replace(/[\s.'’-]/g, '');   // "j mo" matches "JMo"
+const carryPick = n => carryNames().find(x => key(x.name) === key(n)) || carryNames().find(x => looseKey(x.name) === looseKey(n));
+const titleCase = n => n.replace(/\b\p{L}/gu, c => c.toUpperCase());
+const carryRowHTML = (x = {}) => `<div class="cy-row">
+  <input type="search" class="cy-name" list="cy-names" value="${esc(x.name || '')}" placeholder="Player" maxlength="24" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Player">
+  <button type="button" class="cy-sign ${x.neg ? 'neg' : 'pos'}" data-a="cy-sign" aria-label="${x.neg ? 'Lost. Tap to make it a win' : 'Won. Tap to make it a loss'}">${x.neg ? '−' : '+'}</button>
+  <div class="money"><i>$</i><input type="text" class="cy-amt" inputmode="decimal" value="${x.amt || ''}" placeholder="0.00" aria-label="Total"></div>
+  <button type="button" class="ce-del" data-a="cy-del" aria-label="Remove this player">×</button></div>`;
+function openCarry() {
+  lgDupOk = '';
+  const nights = [...new Set(LGD.results.filter(r => !isCarry(r)).map(r => r.date))].sort().reverse();
+  const first = [...LGD.results].map(r => r.date).sort()[0];
+  const asOf = first ? new Date(tms(first) - 864e5).toISOString().slice(0, 10) : todayISO();
+  openSheet(`<div class="sheet-head"><button class="link" data-a="lg-opts">Back</button><h2>Carried-over totals</h2><button class="link strong" data-a="cy-save">Save</button></div>
+  <div class="sheet-body"><form id="cyf" class="ce-box" novalidate>
+    <p class="muted small" style="margin-top:0">For players’ totals when you don’t have the result of each game night. They count in the standings, net winnings and profit over time, but not in nights played or session spread.</p>
+    <label class="field"><span>As of</span><input type="date" id="cy-date" value="${asOf}"></label>
+    <div class="field"><span>Players</span><div id="cy-rows">${[{}, {}, {}].map(carryRowHTML).join('')}</div></div>
+    <datalist id="cy-names">${carryNames().map(x => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>
+    <div class="stack-btns ce-add-wrap"><button type="button" class="btn" data-a="cy-add">Add a player</button></div>
+    <details class="cy-paste"><summary>Paste a list instead</summary>
+      <p class="muted small">One player per line, with their total after the name, like “Parker 281” or “Hedge -206.25”.</p>
+      <textarea id="cy-text" rows="6" placeholder="Parker 281&#10;Hedge -206.25"></textarea>
+      <div class="stack-btns"><button type="button" class="btn" data-a="cy-parse">Fill in from the list</button></div>
+    </details>
+    <p class="calc" id="cy-sum" aria-live="polite"></p>
+    <p class="err" id="lg-err" role="alert"></p>
+    ${nights.length ? `<h3>Already added them as a game night?</h3><p class="muted small">Turn that night’s results into carried-over totals, with the same amounts.</p>
+      <div class="chips">${nights.slice(0, 12).map(d => `<button type="button" class="chip" data-a="cy-conv" data-d="${d}">${fmtDate(d)}</button>`).join('')}</div>` : ''}
+  </form></div>`, { backdropCloses: false });
+  carrySum();
+}
+// Read the rows: { recs } ready to save, or { err }.
+function readCarry() {
+  const date = $('#cy-date').value; if (!isISO(date)) return { err: 'Enter the date these totals are as of.' };
+  const recs = [], seen = new Set();
+  for (const row of document.querySelectorAll('.cy-row')) {
+    const raw = row.querySelector('.cy-name').value.trim().replace(/\s+/g, ' '), amtRaw = row.querySelector('.cy-amt').value.trim();
+    if (!raw && !amtRaw) continue;
+    if (!raw) return { err: 'Enter a name for each total.' };
+    const pick = carryPick(raw), name = pick ? pick.name : raw;
+    if (!amtRaw) return { err: `Enter ${name}’s total.` };
+    const c = parseMoney(amtRaw);
+    if (c == null) return { err: `Enter ${name}’s total as a number, like 281 or 206.25.` };
+    if (c > MAX_C) return { err: 'Amounts over $100,000 aren’t supported.' };
+    if (seen.has(key(name))) return { err: `${name} is on the list twice.` };
+    seen.add(key(name));
+    const neg = row.querySelector('.cy-sign').classList.contains('neg');
+    const rec = { date, player: name, buyIn: neg ? c : 0, cashOut: neg ? 0 : c, imported: true, added: true, carry: true };
+    if (pick && pick.mem) rec.forUid = pick.mem.id;
+    recs.push(rec);
+  }
+  if (!recs.length) return { err: 'Add at least one player’s total.' };
+  return { recs, date };
+}
+function carrySum() {
+  const el = $('#cy-sum'); if (!el) return;
+  let tot = 0, n = 0;
+  document.querySelectorAll('.cy-row').forEach(row => {
+    const c = parseMoney(row.querySelector('.cy-amt').value.trim()); if (c == null) return;
+    n++; tot += row.querySelector('.cy-sign').classList.contains('neg') ? -c : c;
+  });
+  el.innerHTML = n > 1 ? `Together these add up to ${moneyHTML(tot / 100)}.` : '';
+}
+document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#cyf')) { lgFail(''); carrySum(); } });
+// A pasted ledger: "parker 281", "j mo -42", "Hedge: -$206.25"
+function parseLedger(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.trim().match(/^(.*?)[\s:=,]+([+\-−–]?)\s*\$?\s*([\d,]*\.?\d+)\s*$/);
+    if (!m || !m[1].trim()) continue;
+    const raw = m[1].trim().replace(/\s+/g, ' ').slice(0, 24), pick = carryPick(raw);
+    out.push({ name: pick ? pick.name : titleCase(raw), neg: !!m[2] && m[2] !== '+', amt: m[3].replace(/,/g, '') });
+  }
+  return out;
+}
+Object.assign(A, {
+  'lg-carry-open': () => openCarry(),
+  'cy-add': () => { $('#cy-rows').insertAdjacentHTML('beforeend', carryRowHTML()); const r = document.querySelectorAll('.cy-row'); r[r.length - 1].querySelector('.cy-name').focus(); },
+  'cy-del': t => { t.closest('.cy-row').remove(); if (!document.querySelector('.cy-row')) $('#cy-rows').innerHTML = carryRowHTML(); lgFail(''); carrySum(); },
+  'cy-sign': t => {
+    const neg = !t.classList.contains('neg');
+    t.classList.toggle('neg', neg); t.classList.toggle('pos', !neg); t.textContent = neg ? '−' : '+';
+    t.setAttribute('aria-label', neg ? 'Lost. Tap to make it a win' : 'Won. Tap to make it a loss'); carrySum();
+  },
+  'cy-parse': () => {
+    const list = parseLedger($('#cy-text').value);
+    if (!list.length) return lgFail('Felt couldn’t find any totals in that list. Put one player per line, like “Parker 281”.');
+    $('#cy-rows').innerHTML = list.map(carryRowHTML).join('');
+    document.querySelector('.cy-paste').open = false; lgFail(''); carrySum();
+    toast(`Filled in ${list.length} player${list.length === 1 ? '' : 's'}. Check the names, then tap Save.`);
+  },
+  'cy-save': async () => {
+    if (!(LGD.league && LGD.league.createdBy === LGD.uid)) return lgFail('Only the organizer can add carried-over totals.');
+    const got = readCarry(); if (got.err) return lgFail(got.err);
+    const dk = 'carry|' + got.date;
+    if (lgDupOk !== dk && LGD.results.some(r => isCarry(r) && r.date === got.date && got.recs.some(x => key(x.player) === key(pName(r))))) {
+      lgDupOk = dk; return lgFail(`Some of these players already have a carried-over total as of ${fmtDate(got.date)}. Tap Save again to add these as well.`);
+    }
+    const code = S.league.code, n = got.recs.length;
+    lgFail('Saving…');
+    try {
+      const be = await lgBackend(); await be.addResults(code, got.recs);
+      lgDupOk = ''; closeSheet(); renderLeague(); toast(`Added ${n} carried-over total${n === 1 ? '' : 's'}.`);
+    } catch (e) { lgFail(lgErr(e, 'save the totals')); }
+  },
+  'cy-conv': t => {
+    const d = t.dataset.d, list = LGD.results.filter(r => r.date === d && !isCarry(r)).sort((a, b) => lgNet(b) - lgNet(a));
+    const rx = list.some(r => Object.keys(r.reactions || {}).length);
+    openSheet(`<div class="sheet-head"><button class="link" data-a="lg-carry-open">Back</button><h2>Convert a game night</h2><span></span></div>
+    <div class="sheet-body"><p style="margin-top:0">This replaces the ${list.length} result${list.length === 1 ? '' : 's'} from <b>${fmtDate(d)}</b> with carried-over totals for the same amounts.${rx ? ' Reactions on them will be removed.' : ''}</p>
+      <table class="bt list"><tbody>${list.map(r => `<tr><td><div class="ty">${esc(pName(r))}</div></td><td class="num">${moneyHTML(lgNet(r) / 100)}</td></tr>`).join('')}</tbody></table>
+      <p class="err" id="lg-err" role="alert"></p>
+      <div class="stack-btns"><button class="btn primary" data-a="cy-conv-go" data-d="${d}">Convert this night</button><button class="btn" data-a="lg-carry-open">Keep it as a game night</button></div></div>`);
+  },
+  'cy-conv-go': async t => {
+    if (!(LGD.league && LGD.league.createdBy === LGD.uid)) return lgFail('Only the organizer can do this.');
+    const d = t.dataset.d, list = LGD.results.filter(r => r.date === d && !isCarry(r));
+    if (!list.length) return closeSheet();
+    const recs = list.map(r => {
+      const m = forMember(r) || claimer(r) || (!r.imported && LGD.members.find(x => x.id === r.uid)) || null;
+      const rec = { date: d, player: pName(r), buyIn: r.buyIn, cashOut: r.cashOut, imported: true, added: true, carry: true };
+      if (m) rec.forUid = m.id;
+      return rec;
+    });
+    lgFail('Converting…');
+    try {
+      const be = await lgBackend(), code = S.league.code;
+      await be.addResults(code, recs);                      // add the totals first, so nothing is lost if the next step fails
+      await be.deleteResults(code, list.map(r => r.id));
+      closeSheet(); renderLeague(); toast(`Converted ${fmtDate(d)} into carried-over totals.`);
+    } catch (e) { lgFail(lgErr(e, 'convert the night')); }
   },
 });
 
@@ -3658,8 +3828,8 @@ function lgChartsHTML() {
   return `<section class="an"><h2>Net winnings</h2><figure id="lg-bars"><div class="chart"></div><div class="readout" aria-live="polite"></div></figure></section>
     ${many ? `<section class="an"><h2>Profit over time</h2><figure id="lg-lines"><div class="chart"></div><div class="lg-legend" role="group" aria-label="Highlight a player"></div><div class="readout" aria-live="polite"></div>
       <figcaption>Each player’s running total across game nights. Tap a name to highlight it.</figcaption></figure></section>` : ''}
-    <section class="an"><h2>Session spread</h2><figure id="lg-box"><div class="chart"></div><div class="readout" aria-live="polite"></div>
-      <figcaption>How much each player’s results swing from night to night. Each box spans the middle half of their nights, the dark line is the median, and circles are unusual nights.</figcaption></figure></section>`;
+    ${!lgRes().some(r => !isCarry(r)) ? '' : `<section class="an"><h2>Session spread</h2><figure id="lg-box"><div class="chart"></div><div class="readout" aria-live="polite"></div>
+      <figcaption>How much each player’s results swing from night to night. Each box spans the middle half of their nights, the dark line is the median, and circles are unusual nights.</figcaption></figure></section>`}`;
 }
 function drawLeagueCharts() {
   const P = lgPlayers(); if (!P.length) return;
@@ -3688,7 +3858,9 @@ function drawLgBars(fig, P) {
     const r = svg.getBoundingClientRect(), sy = (e.clientY - r.top) * (F.H / r.height);
     const i = Math.max(0, Math.min(P.length - 1, Math.floor((sy - F.m.t) / RH))), p = P[i];
     hov.innerHTML = `<rect class="hsel" x="0" y="${f1(F.row(i))}" width="${F.W}" height="${RH}" rx="8"/>`;
-    out.innerHTML = `<b>${esc(p.name)}</b>: ${moneyHTML(p.total / 100)} over ${p.n} night${p.n === 1 ? '' : 's'}<br>Average ${moneyHTML(p.total / 100 / p.n)}, ${p.wins} winning night${p.wins === 1 ? '' : 's'}`;
+    out.innerHTML = p.n === 0 ? `<b>${esc(p.name)}</b>: ${moneyHTML(p.total / 100)}`
+      : p.total !== p.nightTotal ? `<b>${esc(p.name)}</b>: ${moneyHTML(p.total / 100)}<br>${p.n} night${p.n === 1 ? '' : 's'}, average ${moneyHTML(p.nightTotal / 100 / p.n)}, ${p.wins} winning night${p.wins === 1 ? '' : 's'}`
+      : `<b>${esc(p.name)}</b>: ${moneyHTML(p.total / 100)} over ${p.n} night${p.n === 1 ? '' : 's'}<br>Average ${moneyHTML(p.total / 100 / p.n)}, ${p.wins} winning night${p.wins === 1 ? '' : 's'}`;
   });
 }
 function drawLgLines(fig, P) {
@@ -3723,6 +3895,7 @@ function drawLgLines(fig, P) {
 function lgQuantile(a, q) { const pos = (a.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return a[lo] + (a[hi] - a[lo]) * (pos - lo); }
 function drawLgBox(fig, P) {
   const el = fig.querySelector('.chart'), out = fig.querySelector('.readout');
+  P = P.map(p => ({ ...p, results: p.results.filter(r => !isCarry(r)) })).filter(p => p.results.length);   // game nights only
   const G = P.map(p => {
     const a = p.results.map(r => lgNet(r) / 100).sort((x, y) => x - y), n = a.length;
     const q1 = lgQuantile(a, 0.25), med = lgQuantile(a, 0.5), q3 = lgQuantile(a, 0.75), iqr = q3 - q1;
